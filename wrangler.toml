@@ -1,0 +1,22 @@
+name = "hotgit-cf"
+main = "src/worker.js"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+# ── D1 数据库绑定 ─────────────────────────────────────────────────────
+# 部署前需先运行：wrangler d1 create hotgit-db
+# 将返回的 database_id 填入下方
+[[d1_databases]]
+binding      = "DB"
+database_name = "hotgit-db"
+database_id  = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+
+# ── Cron Trigger：每天 15:00 UTC = 23:00 CST ─────────────────────────
+[triggers]
+crons = ["0 15 * * *"]
+
+# ── 环境变量（敏感值用 wrangler secret put 设置，不要写在这里）────────
+# GITHUB_TOKEN  → wrangler secret put GITHUB_TOKEN
+# ADMIN_TOKEN   → wrangler secret put ADMIN_TOKEN
+[vars]
+ENVIRONMENT = "production"
