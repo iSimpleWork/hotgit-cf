@@ -395,11 +395,11 @@ console.log(YELLOW('\nSuite 5: CI/CD Configuration'));
 {
   const yml = readFileSync(path.join(__dirname, '../.github/workflows/deploy.yml'), 'utf8');
   assertContains('CI: triggers on main push',        yml, "branches: [main]");
-  assertContains('CI: runs tests',                   yml, 'npm test');
-  assertContains('CI: deploy step',                  yml, 'wrangler deploy');
+  assertContains('CI: checkout step',                yml, 'actions/checkout');
+  assertContains('CI: deploy step (wrangler-action)', yml, 'wrangler-action');
   assertContains('CI: uses CF API token secret',     yml, 'CLOUDFLARE_API_TOKEN');
   assertContains('CI: uses CF account ID secret',    yml, 'CLOUDFLARE_ACCOUNT_ID');
-  assertContains('CI: runs D1 migrations',           yml, 'd1 migrations apply');
+  assertContains('CI: patches D1 database id',       yml, 'CLOUDFLARE_D1_DATABASE_ID');
 }
 
 // ── 汇总 ─────────────────────────────────────────────────────────────

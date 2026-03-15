@@ -4,12 +4,13 @@
  * 职责：
  *  1. Cron Trigger (23:00 CST = 15:00 UTC) 自动爬取 GitHub 榜单并写入 D1
  *  2. HTTP 路由：
- *     GET  /           → 首页 HTML
- *     GET  /repos      → 榜单列表页 HTML
- *     GET  /api/repos  → JSON API（分页/筛选）
- *     GET  /api/stats  → 统计摘要
- *     GET  /api/dates  → 所有爬取日期
- *     POST /api/crawl  → 手动触发爬取（需要 X-Admin-Token 头）
+ *     GET  /              → 首页 HTML
+ *     GET  /repos         → 榜单列表页 HTML
+ *     GET  /forceupdate   → 立即同步爬取并展示结果
+ *     GET  /api/repos     → JSON API（分页/筛选）
+ *     GET  /api/stats     → 统计摘要
+ *     GET  /api/dates     → 所有爬取日期
+ *     POST /api/crawl     → 手动触发爬取（需要 X-Admin-Token 头）
  *  3. 静态资源通过 __STATIC_CONTENT 或内联方式提供
  */
 
@@ -56,8 +57,9 @@ export default {
     }
 
     // 页面路由
-    if (path === '/')       return pageIndex(env);
-    if (path === '/repos')  return pageRepos(request, env);
+    if (path === '/')             return pageIndex(env);
+    if (path === '/repos')        return pageRepos(request, env);
+    if (path === '/forceupdate')  return pageForceUpdate(env);
 
     return new Response('Not Found', { status: 404 });
   },
@@ -399,25 +401,10 @@ async function pageIndex(env) {
     <p class="hero-sub">每天自动爬取 GitHub，分析 Star / Fork / 增量排行，帮你找到最值得关注的开源项目</p>
     ${stats.date
       ? `<p class="hero-date">最新数据：${stats.date}</p>`
-      : `<p class="hero-date warning">暂无数据，可点击下方按钮立即爬取</p>`}
-    <button id="btn-crawl" class="btn btn-primary btn-lg">立即爬取数据</button>
-    <span id="crawl-status" class="crawl-status"></span>
+      : `<p class="hero-date warning">暂无数据，请访问 <a href="/forceupdate">/forceupdate</a> 立即更新</p>`}
   </section>
   <section class="stats-grid">${catCards}</section>
-  ${dates.length ? `<section class="history"><h2>历史数据</h2><ul class="date-list">${dateList}</ul></section>` : ''}
-  <script>
-  document.getElementById('btn-crawl').addEventListener('click',function(){
-    const btn=this,st=document.getElementById('crawl-status');
-    btn.disabled=true;btn.textContent='爬取中...';
-    st.textContent='后台爬取任务已启动，约 1-2 分钟完成，完成后刷新页面。';st.className='crawl-status info';
-    fetch('/api/crawl',{method:'POST'}).then(r=>r.json()).then(d=>{
-      st.textContent='✅ '+d.message;st.className='crawl-status success';
-    }).catch(()=>{
-      st.textContent='❌ 请求失败';st.className='crawl-status error';
-      btn.disabled=false;btn.textContent='立即爬取数据';
-    });
-  });
-  </script>`;
+  ${dates.length ? `<section class="history"><h2>历史数据</h2><ul class="date-list">${dateList}</ul></section>` : ''}`;
 
   return html(baseLayout('HotGit — GitHub 热门仓库追踪', body));
 }
@@ -502,7 +489,7 @@ async function pageRepos(request, env) {
   }
 
   const emptyState = result.data.length === 0
-    ? `<div class="empty-state"><p>暂无数据，请返回首页点击「立即爬取数据」。</p><a class="btn btn-primary" href="/">返回首页</a></div>`
+    ? `<div class="empty-state"><p>暂无数据，请访问 <a href="/forceupdate">/forceupdate</a> 立即更新。</p><a class="btn btn-primary" href="/forceupdate">立即更新数据</a></div>`
     : '';
 
   const body = `
@@ -524,6 +511,75 @@ async function pageRepos(request, env) {
   ${result.data.length ? `<div class="repo-list">${cards}</div>${pagination}` : emptyState}`;
 
   return html(baseLayout(`${CATEGORY_LABELS[category] || category} — HotGit`, body));
+}
+
+async function pageForceUpdate(env) {
+  const startTime = Date.now();
+  const today = new Date().toISOString().slice(0, 10);
+  const results = [];
+  let hasError = false;
+
+  // 逐个分类爬取，记录结果（不改变按天记录的逻辑，saveRepos 会覆盖今天同类数据）
+  const tasks = [
+    { name: 'top_stars',    label: CATEGORY_LABELS.top_stars,    fn: () => githubSearch('stars:>1000',                        'stars',  env.GITHUB_TOKEN || '') },
+    { name: 'top_forks',    label: CATEGORY_LABELS.top_forks,    fn: () => githubSearch('forks:>500',                         'forks',  env.GITHUB_TOKEN || '') },
+    { name: 'star_daily',   label: CATEGORY_LABELS.star_daily,   fn: () => githubSearch(`pushed:>${sinceDate(1)}  stars:>10`, 'stars',  env.GITHUB_TOKEN || '') },
+    { name: 'star_weekly',  label: CATEGORY_LABELS.star_weekly,  fn: () => githubSearch(`pushed:>${sinceDate(7)}  stars:>10`, 'stars',  env.GITHUB_TOKEN || '') },
+    { name: 'star_monthly', label: CATEGORY_LABELS.star_monthly, fn: () => githubSearch(`pushed:>${sinceDate(30)} stars:>10`, 'stars',  env.GITHUB_TOKEN || '') },
+  ];
+
+  for (const task of tasks) {
+    const t0 = Date.now();
+    try {
+      const items = await task.fn();
+      const repos = items.slice(0, 100).map((r, i) => fmtRepo(r, task.name, i + 1));
+      await saveRepos(env.DB, repos, today);
+      await logCrawl(env.DB, today, task.name, repos.length, 'ok', '');
+      results.push({ name: task.name, label: task.label, count: repos.length, ok: true, ms: Date.now() - t0 });
+    } catch (e) {
+      await logCrawl(env.DB, today, task.name, 0, 'error', e.message);
+      results.push({ name: task.name, label: task.label, count: 0, ok: false, ms: Date.now() - t0, error: e.message });
+      hasError = true;
+    }
+    // 避免 GitHub 限流
+    await new Promise(r => setTimeout(r, 1000));
+  }
+
+  const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+  const totalCount = results.reduce((s, r) => s + r.count, 0);
+
+  const rows = results.map(r => `
+    <tr class="${r.ok ? '' : 'row-error'}">
+      <td>${r.label}</td>
+      <td>${r.ok ? `<span class="badge-ok">✅ 成功</span>` : `<span class="badge-err">❌ 失败</span>`}</td>
+      <td>${r.ok ? r.count + ' 个' : '—'}</td>
+      <td>${(r.ms / 1000).toFixed(1)}s</td>
+      ${r.ok ? '<td>—</td>' : `<td class="err-msg">${escHtml(r.error || '')}</td>`}
+    </tr>`).join('');
+
+  const summary = hasError
+    ? `<p class="result-summary warn">⚠️ 部分分类更新失败，共写入 ${totalCount} 条数据，耗时 ${elapsed}s</p>`
+    : `<p class="result-summary ok">✅ 全部更新成功，共写入 ${totalCount} 条数据，耗时 ${elapsed}s</p>`;
+
+  const body = `
+  <div class="repos-header">
+    <h1>🔄 立即更新数据</h1>
+    <p class="data-date">更新日期：${today}</p>
+  </div>
+  ${summary}
+  <table class="result-table">
+    <thead>
+      <tr><th>分类</th><th>状态</th><th>写入数量</th><th>耗时</th><th>错误信息</th></tr>
+    </thead>
+    <tbody>${rows}</tbody>
+  </table>
+  <div class="result-actions">
+    <a class="btn btn-primary" href="/">返回首页</a>
+    <a class="btn btn-ghost" href="/repos?category=top_stars">查看榜单</a>
+    <a class="btn btn-ghost" href="/forceupdate">再次更新</a>
+  </div>`;
+
+  return html(baseLayout('立即更新 — HotGit', body));
 }
 
 // ── 工具函数 ───────────────────────────────────────────────────────────
@@ -600,6 +656,17 @@ a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 .page-btn.active{background:var(--primary);border-color:var(--primary);color:#fff}
 .page-info{font-size:.82rem;color:var(--text-muted);margin-left:.5rem}
 .empty-state{text-align:center;padding:4rem 2rem;color:var(--text-muted)}.empty-state p{margin-bottom:1.25rem}
+.result-summary{margin:1.25rem 0;padding:.75rem 1.25rem;border-radius:var(--radius);font-size:.95rem;border:1px solid var(--border)}
+.result-summary.ok{background:#0d2137;border-color:#1f4b6e;color:#3fb950}
+.result-summary.warn{background:#1c1a00;border-color:#6e5a00;color:#e3b341}
+.result-table{width:100%;border-collapse:collapse;margin:1rem 0;font-size:.9rem}
+.result-table th{padding:.6rem 1rem;text-align:left;background:var(--bg-card);border-bottom:2px solid var(--border);color:var(--text-muted);font-weight:600}
+.result-table td{padding:.6rem 1rem;border-bottom:1px solid var(--border);color:var(--text)}
+.result-table tr:last-child td{border-bottom:none}
+.result-table tr.row-error td{background:#1a0a0a}
+.badge-ok{color:#3fb950;font-size:.85rem}.badge-err{color:#f85149;font-size:.85rem}
+.err-msg{color:#f85149;font-size:.82rem;word-break:break-all;max-width:300px}
+.result-actions{display:flex;flex-wrap:wrap;gap:.75rem;margin-top:2rem}
 .footer{border-top:1px solid var(--border);padding:1.25rem;text-align:center;font-size:.82rem;color:var(--text-muted);background:var(--bg-card)}
 @media(max-width:640px){.navbar{padding:0 1rem;gap:.75rem}.hero h1{font-size:1.5rem}.repo-card{flex-direction:column;gap:.5rem}.repo-rank{text-align:left}}
 `;
