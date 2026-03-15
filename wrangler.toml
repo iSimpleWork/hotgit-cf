@@ -2,21 +2,23 @@ name = "hotgit-cf"
 main = "src/worker.js"
 compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
+# account_id 通过环境变量 CLOUDFLARE_ACCOUNT_ID 传入，不写入此文件
 
 # ── D1 数据库绑定 ─────────────────────────────────────────────────────
-# 部署前需先运行：wrangler d1 create hotgit-db
-# 将返回的 database_id 填入下方
+# database_id 通过 .wrangler.env（本地）或 CI Secret 传入，不写入此文件
+# 本地开发：将真实 database_id 写入 .wrangler.env（已被 .gitignore 忽略）
+# 示例：CLOUDFLARE_D1_DATABASE_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 [[d1_databases]]
-binding      = "DB"
+binding       = "DB"
 database_name = "hotgit-db"
-database_id  = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+database_id   = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
 
 # ── Cron Trigger：每天 15:00 UTC = 23:00 CST ─────────────────────────
 [triggers]
 crons = ["0 15 * * *"]
 
-# ── 环境变量（敏感值用 wrangler secret put 设置，不要写在这里）────────
-# GITHUB_TOKEN  → wrangler secret put GITHUB_TOKEN
-# ADMIN_TOKEN   → wrangler secret put ADMIN_TOKEN
+# ── 环境变量（所有敏感值均通过系统环境变量或 wrangler secret put 传入）─
+# GITHUB_TOKEN   → wrangler secret put GITHUB_TOKEN
+# ADMIN_TOKEN    → wrangler secret put ADMIN_TOKEN（可选）
 [vars]
 ENVIRONMENT = "production"

@@ -1,91 +1,164 @@
-# HotGit — Cloudflare Workers 版
+# HotGit
 
-GitHub 热门仓库每日追踪系统，基于 **Cloudflare Workers + D1 + Cron Triggers** 构建，零服务器运维。
+> 每天自动追踪 GitHub 最热项目，按 Star 总数、Fork 数、日/周/月增量分类展示。
+
+**线上地址**：https://hotgit-cf.linkai.workers.dev
+
+---
 
 ## 功能
 
-| 榜单 | 说明 |
-|------|------|
-| ⭐ Star 总榜 | 全网 Star 数最多的 100 个仓库 |
-| 🍴 Fork 总榜 | 全网 Fork 数最多的 100 个仓库 |
-| 📈 日增 Star | 近 1 天内活跃度最高的 100 个仓库 |
-| 📅 周增 Star | 近 7 天内活跃度最高的 100 个仓库 |
-| 🗓️ 月增 Star | 近 30 天内活跃度最高的 100 个仓库 |
+- 每天 23:00（北京时间）自动爬取 GitHub 数据
+- 展示维度：Star 总数 Top100 / Fork 数 Top100 / 日增 Top100 / 周增 Top100 / 月增 Top100
+- 支持分页（10/20/50/100 条每页）
+- 支持编程语言筛选 + 关键词搜索
+- 展示字段：项目名、Star/Fork/Issues、最近推送时间、项目简介、语言、Topics、GitHub 链接
+- 支持手动触发爬取
 
-每天 **23:00 CST（15:00 UTC）** 自动爬取，支持分页、语言筛选、关键词搜索。
-
-## 本地开发
-
-```bash
-npm install
-
-# 运行测试
-npm test
-
-# 本地开发服务器（需先配置 wrangler.toml）
-npm run dev
-```
-
-## 首次部署流程
-
-### 1. 准备账号信息
-
-需要提供以下信息（见 `DEPLOY_CHECKLIST.md`）：
-- Cloudflare Account ID
-- Cloudflare API Token
-- GitHub Personal Access Token（可选，提升 API 限额）
-
-### 2. 创建 D1 数据库
-
-```bash
-npx wrangler d1 create hotgit-db
-# 将输出的 database_id 填入 wrangler.toml
-```
-
-### 3. 更新 wrangler.toml
-
-将 `database_id` 替换为上一步获得的真实 ID。
-
-### 4. 设置 Secrets
-
-```bash
-npx wrangler secret put GITHUB_TOKEN   # GitHub PAT
-npx wrangler secret put ADMIN_TOKEN    # 手动触发爬取的鉴权 token
-```
-
-### 5. 执行数据库迁移
-
-```bash
-npm run db:migrate:remote
-```
-
-### 6. 部署
-
-```bash
-npm run deploy
-```
-
-### 7. 通过 GitHub Actions 自动部署
-
-在 GitHub 仓库 Settings → Secrets 中添加：
-- `CLOUDFLARE_API_TOKEN`
-- `CLOUDFLARE_ACCOUNT_ID`
-
-之后每次推送到 `main` 分支将自动触发测试 + 部署。
-
-## API
-
-| 端点 | 说明 |
-|------|------|
-| `GET /api/repos?category=top_stars&page=1&per_page=20` | 获取仓库列表 |
-| `GET /api/stats` | 获取统计摘要 |
-| `GET /api/dates` | 获取所有爬取日期 |
-| `POST /api/crawl` | 手动触发爬取（需 `X-Admin-Token` 头） |
+---
 
 ## 技术栈
 
-- **运行时**：Cloudflare Workers（Edge，全球加速）
-- **数据库**：Cloudflare D1（SQLite，每天 10 万次读免费）
-- **定时任务**：Cloudflare Cron Triggers
-- **前端**：服务端渲染 HTML（无框架，极速加载）
-- **CI/CD**：GitHub Actions
+| 层 | 技术 |
+|---|---|
+| 运行时 | Cloudflare Workers |
+| 数据库 | Cloudflare D1（SQLite） |
+| 定时任务 | Cloudflare Cron Triggers |
+| 前端 | 内联 HTML/CSS/JS（Workers 直接渲染） |
+| CI/CD | GitHub Actions |
+
+---
+
+## 本地开发 & 部署
+
+### 前提条件
+
+- Node.js 16+
+- Cloudflare 账号（免费套餐即可）
+- GitHub 账号
+
+### 第一步：克隆并安装依赖
+
+```bash
+git clone https://github.com/iSimpleWork/hotgit-cf.git
+cd hotgit-cf
+npm install
+```
+
+### 第二步：配置环境变量
+
+所有敏感信息通过**系统环境变量**传入，**不写入任何代码或配置文件**。
+
+复制模板并填入真实值：
+
+```bash
+cp .wrangler.env.example .wrangler.env
+```
+
+编辑 `.wrangler.env`（已被 `.gitignore` 排除，不会提交）：
+
+```bash
+# Cloudflare 账号 ID（登录 dash.cloudflare.com 右侧边栏查看）
+export CLOUDFLARE_ACCOUNT_ID=your_account_id
+
+# Cloudflare API Token（需要 Workers Edit + D1 Edit 权限）
+# 创建地址：dash.cloudflare.com/profile/api-tokens
+export CLOUDFLARE_API_TOKEN=your_api_token
+
+# D1 数据库 ID（第三步创建后填入）
+export HOTGIT_D1_DATABASE_ID=your_d1_database_id
+
+# GitHub PAT（只需 public_repo 权限，用于提升 API 限额，可选）
+# 创建地址：github.com/settings/tokens
+export GITHUB_TOKEN=your_github_pat
+```
+
+加载环境变量：
+
+```bash
+source .wrangler.env
+```
+
+### 第三步：创建 D1 数据库
+
+```bash
+npx wrangler d1 create hotgit-db
+```
+
+输出中会包含 `database_id`，将其填入 `.wrangler.env` 的 `HOTGIT_D1_DATABASE_ID`。
+
+执行数据库迁移：
+
+```bash
+npx wrangler d1 execute hotgit-db --file=migrations/0001_init.sql --remote
+```
+
+### 第四步：部署
+
+```bash
+bash deploy.sh
+```
+
+`deploy.sh` 会从环境变量读取配置，动态生成临时部署文件，**不会修改源码中的 wrangler.toml**。
+
+部署成功后设置 GitHub Token Secret（提升爬取限额）：
+
+```bash
+echo "$GITHUB_TOKEN" | npx wrangler secret put GITHUB_TOKEN
+```
+
+---
+
+## GitHub Actions 自动部署
+
+在仓库的 **Settings → Secrets and variables → Actions** 中添加以下 4 个 Secret：
+
+| Secret 名称 | 说明 |
+|---|---|
+| `CLOUDFLARE_API_TOKEN` | Cloudflare API Token（Workers Edit + D1 Edit 权限） |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare 账号 ID |
+| `CLOUDFLARE_D1_DATABASE_ID` | D1 数据库 ID |
+
+配置完成后，每次推送到 `main` 分支即自动部署。
+
+---
+
+## API 接口
+
+| 接口 | 说明 |
+|---|---|
+| `GET /` | 首页 |
+| `GET /repos?category=stars&page=1&per_page=20&lang=Python&q=search` | 仓库列表 |
+| `GET /api/repos` | JSON 格式仓库列表 |
+| `GET /api/stats` | 统计信息 |
+| `POST /api/crawl` | 手动触发爬取 |
+
+---
+
+## 项目结构
+
+```
+hotgit-cf/
+├── src/
+│   └── worker.js          # Cloudflare Worker 主入口（爬虫 + API + 前端渲染）
+├── migrations/
+│   └── 0001_init.sql      # D1 数据库初始化 SQL
+├── test/
+│   └── run.js             # 72 个单元测试
+├── .github/
+│   └── workflows/
+│       └── deploy.yml     # GitHub Actions 自动部署
+├── wrangler.toml          # Wrangler 配置（不含敏感信息）
+├── .wrangler.env.example  # 环境变量模板（可提交）
+├── .wrangler.env          # 本地环境变量（已 gitignore，不提交）
+├── deploy.sh              # 本地部署脚本
+└── .gitignore
+```
+
+---
+
+## 注意事项
+
+- `.wrangler.env` 已被 `.gitignore` 排除，其中的真实 Token/ID **不会提交到 Git**
+- `wrangler.toml` 中的 `database_id` 字段保持占位符，由 `deploy.sh` 或 CI 在运行时替换
+- 所有 Cloudflare Secrets（如 `GITHUB_TOKEN`）通过 `wrangler secret put` 注入，不写入代码
