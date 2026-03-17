@@ -499,7 +499,6 @@ async function pageRepos(request, env) {
   </div>
   <form class="filter-bar" method="get" action="/repos">
     <input type="hidden" name="category" value="${category}"/>
-    <input type="hidden" name="date" value="${crawlDate||''}"/>
     <input class="input-search" type="text" name="search" placeholder="搜索项目名/描述…" value="${escHtml(search)}"/>
     <select name="lang" class="select-lang"><option value="">全部语言</option>${langOptions}</select>
     <select name="per_page" class="select-per-page">${perPageOptions}</select>

@@ -389,6 +389,36 @@ console.log(YELLOW('\nSuite 4: Worker Source Validation'));
   assertContains('worker: cron comment 15:00 UTC',   src, '15:00 UTC');
 }
 
+// ── Suite 4b: 日期筛选 Bug 修复验证 ─────────────────────────────────
+console.log(YELLOW('\nSuite 4b: Date Filter Bug Fix Validation'));
+
+{
+  const src = readFileSync(path.join(__dirname, '../src/worker.js'), 'utf8');
+
+  // 提取 filter-bar 表单代码块（从 filter-bar 到 </form>）
+  const formMatch = src.match(/<form class="filter-bar"[\s\S]*?<\/form>/);
+  assert('filter-bar form exists in source', !!formMatch);
+
+  if (formMatch) {
+    const formHtml = formMatch[0];
+
+    // 统计 name="date" 出现次数，应恰好只有 1 次（select，无 hidden input）
+    const dateNameCount = (formHtml.match(/name="date"/g) || []).length;
+    assertEqual('form has exactly 1 name="date" field (no duplicate)', dateNameCount, 1);
+
+    // 不应包含 hidden date input
+    assert('no hidden date input in form',
+      !formHtml.includes('type="hidden"') || !formHtml.includes('name="date"') ||
+      // 更精确：hidden input 里不含 name="date"
+      !/<input[^>]*type="hidden"[^>]*name="date"/.test(formHtml) &&
+      !/<input[^>]*name="date"[^>]*type="hidden"/.test(formHtml)
+    );
+
+    // select name="date" 存在
+    assert('select[name="date"] exists in form', /<select[^>]*name="date"/.test(formHtml));
+  }
+}
+
 // ── Suite 5: GitHub Actions 配置校验 ───────────────────────────────
 console.log(YELLOW('\nSuite 5: CI/CD Configuration'));
 
