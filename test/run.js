@@ -61,8 +61,12 @@ function fmtNum(n) {
   return Number(n).toLocaleString('en-US');
 }
 
+function todayCST() {
+  return new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10);
+}
+
 function sinceDate(days) {
-  const d = new Date(Date.now() - days * 86400_000);
+  const d = new Date(Date.now() + 8 * 3600_000 - days * 86400_000);
   return d.toISOString().slice(0, 10);
 }
 
@@ -274,9 +278,14 @@ assertEqual('fmtNum: 1000 → 1,000',    fmtNum(1000),   '1,000');
 assertEqual('fmtNum: 0 → 0',           fmtNum(0),      '0');
 assertEqual('fmtNum: 1500000',         fmtNum(1500000), '1,500,000');
 
-assert('sinceDate(1) < today',   sinceDate(1) < new Date().toISOString().slice(0,10));
-assert('sinceDate(7) < sinceDate(1)', sinceDate(7) < sinceDate(1));
+assert('sinceDate(1) < todayCST',      sinceDate(1) < todayCST());
+assert('sinceDate(7) < sinceDate(1)',  sinceDate(7) < sinceDate(1));
 assert('sinceDate(30) < sinceDate(7)', sinceDate(30) < sinceDate(7));
+
+// todayCST 返回 YYYY-MM-DD 格式
+assert('todayCST: format YYYY-MM-DD', /^\d{4}-\d{2}-\d{2}$/.test(todayCST()));
+// todayCST 应 >= UTC 日期（CST 比 UTC 早 8 小时，日期只会相同或更大）
+assert('todayCST >= UTC date', todayCST() >= new Date().toISOString().slice(0, 10));
 
 assertEqual('parseIntParam valid "42"', parseIntParam('42', 1),  42);
 assertEqual('parseIntParam invalid',    parseIntParam('abc', 5), 5);
@@ -355,7 +364,7 @@ console.log(YELLOW('\nSuite 3: Configuration Validation'));
 {
   const toml = readFileSync(path.join(__dirname, '../wrangler.toml'), 'utf8');
   assertContains('wrangler.toml: cron trigger',     toml, 'crons');
-  assertContains('wrangler.toml: 15:00 UTC cron',   toml, '0 15 * * *');
+  assertContains('wrangler.toml: 20:00 UTC cron',   toml, '0 20 * * *');
   assertContains('wrangler.toml: D1 binding',        toml, 'd1_databases');
   assertContains('wrangler.toml: binding DB',         toml, 'binding');
   assertContains('wrangler.toml: main worker',       toml, 'src/worker.js');
@@ -386,7 +395,9 @@ console.log(YELLOW('\nSuite 4: Worker Source Validation'));
   assertContains('worker: /api/stats route',         src, "'/api/stats'");
   assertContains('worker: /api/crawl route',         src, "'/api/crawl'");
   assertContains('worker: D1 batch insert',          src, 'db.batch');
-  assertContains('worker: cron comment 15:00 UTC',   src, '15:00 UTC');
+  assertContains('worker: cron comment 20:00 UTC',   src, '20:00 UTC');
+  assertContains('worker: todayCST function',        src, 'function todayCST');
+  assertContains('worker: CST offset +8h',           src, '8 * 3600_000');
 }
 
 // ── Suite 4b: 日期筛选 Bug 修复验证 ─────────────────────────────────

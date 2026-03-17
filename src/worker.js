@@ -64,7 +64,7 @@ export default {
     return new Response('Not Found', { status: 404 });
   },
 
-  // Cron Trigger：每天 15:00 UTC = 23:00 CST
+  // Cron Trigger：每天 20:00 UTC = 次日 04:00 CST
   async scheduled(event, env, ctx) {
     ctx.waitUntil(runCrawl(env));
   },
@@ -132,9 +132,14 @@ function fmtRepo(repo, category, rank) {
   };
 }
 
-/** 按天数获取 since 日期字符串 */
+/** 返回 CST（UTC+8）当天日期字符串，格式 YYYY-MM-DD */
+function todayCST() {
+  return new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10);
+}
+
+/** 按天数获取 since 日期字符串（基于 CST） */
 function sinceDate(days) {
-  const d = new Date(Date.now() - days * 86400_000);
+  const d = new Date(Date.now() + 8 * 3600_000 - days * 86400_000);
   return d.toISOString().slice(0, 10);
 }
 
@@ -161,7 +166,7 @@ async function fetchAll(githubToken) {
 
 /** 主爬取流程：爬取 + 写入 D1 */
 async function runCrawl(env) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayCST();
   console.log(`[crawl] start date=${today}`);
 
   let allRepos;
@@ -370,7 +375,7 @@ function baseLayout(title, bodyContent) {
   </nav>
   <main class="container">${bodyContent}</main>
   <footer class="footer">
-    <p>HotGit — GitHub 热门仓库追踪 · 数据每日 23:00 CST 自动更新 · Powered by Cloudflare Workers</p>
+    <p>HotGit — GitHub 热门仓库追踪 · 数据每日 04:00 CST 自动更新 · Powered by Cloudflare Workers</p>
   </footer>
 </body>
 </html>`;
@@ -514,7 +519,7 @@ async function pageRepos(request, env) {
 
 async function pageForceUpdate(env) {
   const startTime = Date.now();
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayCST();
   const results = [];
   let hasError = false;
 
