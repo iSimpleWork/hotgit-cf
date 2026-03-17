@@ -34,7 +34,11 @@ function assertContains(desc, str, sub) {
 function fmtRepo(repo, category, rank) {
   let pushedAt = repo.pushed_at || repo.updated_at || '';
   if (pushedAt) {
-    try { pushedAt = new Date(pushedAt).toISOString().replace('T', ' ').slice(0, 19); }
+    try {
+      // 转为北京时间（UTC+8）后格式化，避免 UTC 日期与北京时间差一天
+      pushedAt = new Date(new Date(pushedAt).getTime() + 8 * 3600_000)
+        .toISOString().replace('T', ' ').slice(0, 19);
+    }
     catch (_) {}
   }
   return {
@@ -255,9 +259,21 @@ console.log(YELLOW('Suite 1: Utility Functions'));
   assertEqual('fmtRepo: forks',             repo.forks,      50000);
   assertEqual('fmtRepo: category',          repo.category,   'top_stars');
   assertEqual('fmtRepo: rank',              repo.rank,       1);
-  assert('fmtRepo: pushed_at has date',     repo.pushed_at.includes('2026-03-14'));
+  // pushed_at = UTC 08:00 = CST 16:00，+8h 后日期仍是 2026-03-14
+  assert('fmtRepo: pushed_at date is CST 2026-03-14', repo.pushed_at.startsWith('2026-03-14'));
   assertEqual('fmtRepo: topics joined',     repo.topics,     'kernel,os');
   assertEqual('fmtRepo: language',          repo.language,   'C');
+}
+
+{
+  // 跨日边界：UTC 2026-03-15T00:30:00Z = CST 2026-03-15T08:30:00+08
+  // 不加 +8h 时 toISOString() 取的是 UTC 日期 2026-03-15，恰好相同；
+  // 但 UTC 2026-03-13T23:00:00Z = CST 2026-03-14T07:00:00+08 → 应显示 2026-03-14 而非 2026-03-13
+  const rEdge = fmtRepo({
+    full_name: 'edge/case', html_url: 'https://github.com/edge/case',
+    pushed_at: '2026-03-13T23:00:00Z',  // UTC 23:00 = CST 次日 07:00
+  }, 'top_stars', 1);
+  assert('fmtRepo: UTC 23:00 → CST 次日日期', rEdge.pushed_at.startsWith('2026-03-14'));
 }
 
 {

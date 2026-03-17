@@ -2,7 +2,7 @@
  * HotGit — Cloudflare Worker
  *
  * 职责：
- *  1. Cron Trigger (23:00 CST = 15:00 UTC) 自动爬取 GitHub 榜单并写入 D1
+ *  1. Cron Trigger (04:00 CST = 20:00 UTC 前一天) 自动爬取 GitHub 榜单并写入 D1
  *  2. HTTP 路由：
  *     GET  /              → 首页 HTML
  *     GET  /repos         → 榜单列表页 HTML
@@ -113,7 +113,11 @@ async function githubSearch(query, sort, githubToken, perPage = 100) {
 function fmtRepo(repo, category, rank) {
   let pushedAt = repo.pushed_at || repo.updated_at || '';
   if (pushedAt) {
-    try { pushedAt = new Date(pushedAt).toISOString().replace('T', ' ').slice(0, 19); }
+    try {
+      // 转为北京时间（UTC+8）后格式化，避免 UTC 日期与北京时间差一天
+      pushedAt = new Date(new Date(pushedAt).getTime() + 8 * 3600_000)
+        .toISOString().replace('T', ' ').slice(0, 19);
+    }
     catch (_) {}
   }
   return {
