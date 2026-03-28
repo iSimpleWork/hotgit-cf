@@ -168,6 +168,27 @@ async function fetchAll(githubToken) {
   return result;
 }
 
+/** 保存当日 Star 历史数据 */
+async function saveStarsHistory(db, repos, crawlDate) {
+  if (!repos.length) return;
+  const stmts = repos.map(r =>
+    db.prepare(`
+      INSERT INTO repo_stars_history (full_name, crawl_date, stars, forks)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(full_name, crawl_date) DO UPDATE SET stars = excluded.stars, forks = excluded.forks
+    `).bind(r.full_name, crawlDate, r.stars, r.forks)
+  );
+  await db.batch(stmts);
+}
+
+/** 获取历史 Star 数据 */
+async function getHistoryStars(db, fullName, date) {
+  const row = await db.prepare(
+    'SELECT stars, forks FROM repo_stars_history WHERE full_name = ? AND crawl_date = ?'
+  ).bind(fullName, date).first();
+  return row || null;
+}
+
 /** 主爬取流程：爬取 + 写入 D1 */
 async function runCrawl(env) {
   const today = todayCST();
@@ -180,6 +201,15 @@ async function runCrawl(env) {
     console.error('[crawl] fetchAll error:', e.message);
     await logCrawl(env.DB, today, 'ALL', 0, 'error', e.message);
     return;
+  }
+
+  // 先保存所有 repo 的历史数据（用于计算增量）
+  const allReposFlat = Object.values(allRepos).flat();
+  try {
+    await saveStarsHistory(env.DB, allReposFlat, today);
+    console.log('[crawl] history saved');
+  } catch (e) {
+    console.error('[crawl] save history error:', e.message);
   }
 
   for (const [category, repos] of Object.entries(allRepos)) {
@@ -253,9 +283,29 @@ async function getCrawlDates(db) {
   return rows.results.map(r => r.crawl_date);
 }
 
+function getHistoryDate(crawlDate, daysAgo) {
+  const [y, m, d] = crawlDate.split('-').map(Number);
+  const date = new Date(y, m - 1, d);
+  date.setDate(date.getDate() - daysAgo);
+  const yy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
+  return `${yy}-${mm}-${dd}`;
+}
+
 async function queryRepos(db, { category, crawlDate, page, perPage, lang, search }) {
   if (!crawlDate) crawlDate = await getLatestDate(db);
   if (!crawlDate) return { total: 0, page, per_page: perPage, data: [] };
+
+  const isDaily = category === 'star_daily';
+  const isWeekly = category === 'star_weekly';
+  const isMonthly = category === 'star_monthly';
+  const isIncrement = isDaily || isWeekly || isMonthly;
+
+  let historyDate = null;
+  if (isDaily) historyDate = getHistoryDate(crawlDate, 1);
+  else if (isWeekly) historyDate = getHistoryDate(crawlDate, 7);
+  else if (isMonthly) historyDate = getHistoryDate(crawlDate, 30);
 
   const conditions = ['crawl_date = ?', 'category = ?'];
   const params     = [crawlDate, category];
@@ -265,16 +315,37 @@ async function queryRepos(db, { category, crawlDate, page, perPage, lang, search
 
   const where = conditions.join(' AND ');
 
-  const countRow = await db.prepare(`SELECT COUNT(*) AS n FROM repos WHERE ${where}`)
-    .bind(...params).first();
-  const total = countRow?.n || 0;
+  let rows;
+  if (isIncrement && historyDate) {
+    rows = await db.prepare(
+      `SELECT r.*, h.stars AS history_stars, h.forks AS history_forks 
+       FROM repos r 
+       LEFT JOIN repo_stars_history h ON r.full_name = h.full_name AND h.crawl_date = ?
+       WHERE ${where}`
+    ).bind(historyDate, ...params).all();
+  } else {
+    rows = await db.prepare(
+      `SELECT * FROM repos WHERE ${where}`
+    ).bind(...params).all();
+  }
 
+  let data = rows.results;
+
+  if (isIncrement && historyDate) {
+    data = data.map(r => ({
+      ...r,
+      stars_incr: r.history_stars ? r.stars - r.history_stars : r.stars,
+      forks_incr: r.history_forks ? r.forks - r.history_forks : r.forks,
+    }));
+    data.sort((a, b) => b.stars_incr - a.stars_incr);
+    data = data.map((r, i) => ({ ...r, rank: i + 1 }));
+  }
+
+  const total = data.length;
   const offset = (page - 1) * perPage;
-  const rows   = await db.prepare(
-    `SELECT * FROM repos WHERE ${where} ORDER BY rank ASC LIMIT ? OFFSET ?`
-  ).bind(...params, perPage, offset).all();
+  data = data.slice(offset, offset + perPage);
 
-  return { total, page, per_page: perPage, data: rows.results };
+  return { total, page, per_page: perPage, data };
 }
 
 async function getLanguages(db, category, crawlDate) {
@@ -447,6 +518,8 @@ async function pageRepos(request, env) {
     `<option value="${n}"${n === perPage ? ' selected' : ''}>每页 ${n} 条</option>`
   ).join('');
 
+  const isIncrement = ['star_daily', 'star_weekly', 'star_monthly'].includes(category);
+
   // 仓库卡片
   const cards = result.data.map(repo => {
     const langBadge = repo.language && repo.language !== 'Unknown'
@@ -457,6 +530,18 @@ async function pageRepos(request, env) {
           `<span class="topic-tag">${escHtml(t)}</span>`).join('')
       : '';
     const pushedDate = repo.pushed_at ? repo.pushed_at.slice(0,10) : '—';
+    
+    let starsDisplay, forksDisplay;
+    if (isIncrement && repo.stars_incr !== undefined) {
+      const incrClass = repo.stars_incr > 0 ? 'incr-pos' : repo.stars_incr < 0 ? 'incr-neg' : '';
+      const incrSign = repo.stars_incr > 0 ? '+' : '';
+      starsDisplay = `<span class="${incrClass}">⭐ ${fmtNum(repo.stars)} <span class="incr">(${incrSign}${fmtNum(repo.stars_incr)})</span></span>`;
+      forksDisplay = repo.forks_incr !== undefined ? `<span class="${repo.forks_incr > 0 ? 'incr-pos' : repo.forks_incr < 0 ? 'incr-neg' : ''}">🍴 ${fmtNum(repo.forks)} <span class="incr">(${repo.forks_incr > 0 ? '+' : ''}${fmtNum(repo.forks_incr)})</span></span>` : `<span>🍴 ${fmtNum(repo.forks)}</span>`;
+    } else {
+      starsDisplay = `<span>⭐ ${fmtNum(repo.stars)}</span>`;
+      forksDisplay = `<span>🍴 ${fmtNum(repo.forks)}</span>`;
+    }
+    
     return `
     <div class="repo-card">
       <div class="repo-rank">#${repo.rank}</div>
@@ -468,8 +553,8 @@ async function pageRepos(request, env) {
         ${repo.description ? `<p class="repo-desc">${escHtml(repo.description)}</p>` : ''}
         ${topics ? `<div class="repo-topics">${topics}</div>` : ''}
         <div class="repo-meta">
-          <span>⭐ ${fmtNum(repo.stars)}</span>
-          <span>🍴 ${fmtNum(repo.forks)}</span>
+          ${starsDisplay}
+          ${forksDisplay}
           <span>🐛 ${repo.open_issues}</span>
           <span>🕐 ${pushedDate}</span>
           ${repo.homepage ? `<a class="meta-link" href="${escHtml(repo.homepage)}" target="_blank" rel="noopener">🌐 主页</a>` : ''}
@@ -658,6 +743,8 @@ a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 .topic-tag{font-size:.72rem;padding:.1rem .5rem;border-radius:12px;background:#0d2137;border:1px solid #1f4b6e;color:#79b8ff}
 .repo-meta{display:flex;flex-wrap:wrap;gap:1rem;font-size:.82rem;color:var(--text-muted);align-items:center}
 .meta-link{color:var(--text-muted)}.meta-link:hover{color:var(--accent)}
+.incr{font-size:.75rem;margin-left:.15rem}
+.incr-pos{color:#3fb950}.incr-neg{color:#f85149}
 .pagination{display:flex;flex-wrap:wrap;gap:.35rem;align-items:center;margin-top:2rem}
 .page-btn{padding:.35rem .75rem;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);color:var(--text-muted);font-size:.85rem;cursor:pointer;transition:background .15s,color .15s}
 .page-btn:hover{background:var(--bg-card-h);color:var(--text);text-decoration:none}

@@ -79,6 +79,16 @@ function parseIntParam(v, def) {
   return isNaN(n) ? def : n;
 }
 
+function getHistoryDate(crawlDate, daysAgo) {
+  const [y, m, d] = crawlDate.split('-').map(Number);
+  const date = new Date(y, m - 1, d);
+  date.setDate(date.getDate() - daysAgo);
+  const yy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
+  return `${yy}-${mm}-${dd}`;
+}
+
 // ════════════════════════════════════════════════════════════════════
 // Mock D1 Database（内存实现，满足 Worker 中的 D1 接口）
 // ════════════════════════════════════════════════════════════════════
@@ -87,6 +97,7 @@ class MockD1 {
   constructor() {
     this._repos    = [];
     this._logs     = [];
+    this._history  = [];
     this._nextId   = 1;
   }
   prepare(sql) { return new MockStatement(sql, this); }
@@ -108,6 +119,19 @@ class MockStatement {
         full_name:p[3], html_url:p[4], description:p[5], language:p[6],
         stars:p[7], forks:p[8], open_issues:p[9], pushed_at:p[10], topics:p[11], homepage:p[12] });
       return { results:[], success:true };
+    }
+    if (/^INSERT INTO repo_stars_history/i.test(sql)) {
+      const existing = db._history.findIndex(h => h.full_name === p[0] && h.crawl_date === p[1]);
+      if (existing >= 0) {
+        db._history[existing] = { id: db._history[existing].id, full_name: p[0], crawl_date: p[1], stars: p[2], forks: p[3] };
+      } else {
+        db._history.push({ id: db._nextId++, full_name: p[0], crawl_date: p[1], stars: p[2], forks: p[3] });
+      }
+      return { results:[], success:true };
+    }
+    if (/^SELECT.*FROM repo_stars_history.*WHERE.*full_name/i.test(sql)) {
+      const h = db._history.find(h => h.full_name === p[0] && h.crawl_date === p[1]);
+      return { results: h ? [h] : [], success: true };
     }
     if (/^INSERT INTO crawl_log/i.test(sql)) {
       db._logs.push({ crawl_date:p[0], category:p[1], count:p[2], status:p[3], message:p[4] });
@@ -444,6 +468,81 @@ console.log(YELLOW('\nSuite 4b: Date Filter Bug Fix Validation'));
     // select name="date" 存在
     assert('select[name="date"] exists in form', /<select[^>]*name="date"/.test(formHtml));
   }
+}
+
+// ── Suite 6: 增量计算功能测试 ───────────────────────────────────────
+console.log(YELLOW('\nSuite 6: Star Increment Calculation'));
+
+{
+  assertEqual('getHistoryDate: 2026-03-28 - 1 day', getHistoryDate('2026-03-28', 1), '2026-03-27');
+  assertEqual('getHistoryDate: 2026-03-28 - 7 days', getHistoryDate('2026-03-28', 7), '2026-03-21');
+  assertEqual('getHistoryDate: 2026-03-28 - 30 days', getHistoryDate('2026-03-28', 30), '2026-02-26');
+}
+
+{
+  const db = new MockD1();
+  await db.prepare('INSERT INTO repo_stars_history (full_name, crawl_date, stars, forks) VALUES (?, ?, ?, ?)')
+    .bind('owner/repo-a', '2026-03-27', 1000, 100).run();
+  await db.prepare('INSERT INTO repo_stars_history (full_name, crawl_date, stars, forks) VALUES (?, ?, ?, ?)')
+    .bind('owner/repo-b', '2026-03-27', 500, 50).run();
+  
+  const h1 = await db.prepare('SELECT stars, forks FROM repo_stars_history WHERE full_name = ? AND crawl_date = ?')
+    .bind('owner/repo-a', '2026-03-27').first();
+  assertEqual('history query: repo-a stars', h1.stars, 1000);
+  assertEqual('history query: repo-a forks', h1.forks, 100);
+  
+  const h2 = await db.prepare('SELECT stars, forks FROM repo_stars_history WHERE full_name = ? AND crawl_date = ?')
+    .bind('owner/repo-c', '2026-03-27').first();
+  assert('history query: non-existent returns null', h2 === null);
+}
+
+{
+  const db = new MockD1();
+  db._history.push({ id: 1, full_name: 'owner/repo-a', crawl_date: '2026-03-27', stars: 1000, forks: 100 });
+  db._history.push({ id: 2, full_name: 'owner/repo-b', crawl_date: '2026-03-27', stars: 800, forks: 80 });
+  db._history.push({ id: 3, full_name: 'owner/repo-c', crawl_date: '2026-03-27', stars: 500, forks: 50 });
+  
+  const repos = [
+    { full_name: 'owner/repo-a', stars: 1200, forks: 150, category: 'star_daily', rank: 1 },
+    { full_name: 'owner/repo-b', stars: 850, forks: 90, category: 'star_daily', rank: 2 },
+    { full_name: 'owner/repo-c', stars: 600, forks: 60, category: 'star_daily', rank: 3 },
+    { full_name: 'owner/repo-d', stars: 300, forks: 30, category: 'star_daily', rank: 4 },
+  ];
+  
+  const historyDate = '2026-03-27';
+  const withHistory = repos.map(r => {
+    const h = db._history.find(h => h.full_name === r.full_name && h.crawl_date === historyDate);
+    return {
+      ...r,
+      stars_incr: h ? r.stars - h.stars : r.stars,
+      forks_incr: h ? r.forks - h.forks : r.forks,
+    };
+  });
+  
+  withHistory.sort((a, b) => b.stars_incr - a.stars_incr);
+  
+  assertEqual('increment: repo-d (new, no history) = 300', withHistory[0].stars_incr, 300);
+  assertEqual('increment: repo-a +200', withHistory[1].stars_incr, 200);
+  assertEqual('increment: repo-c +100', withHistory[2].stars_incr, 100);
+  assertEqual('increment: repo-b +50', withHistory[3].stars_incr, 50);
+  assertEqual('sorted: first is repo-d (highest - new repo)', withHistory[0].full_name, 'owner/repo-d');
+}
+
+{
+  const src = readFileSync(path.join(__dirname, '../src/worker.js'), 'utf8');
+  assertContains('worker: repo_stars_history table', src, 'repo_stars_history');
+  assertContains('worker: saveStarsHistory function', src, 'async function saveStarsHistory');
+  assertContains('worker: stars_incr calculation', src, 'stars_incr');
+  assertContains('worker: incr-pos CSS class', src, 'incr-pos');
+  assertContains('worker: incr-neg CSS class', src, 'incr-neg');
+}
+
+{
+  const sql = readFileSync(path.join(__dirname, '../migrations/0002_add_history.sql'), 'utf8');
+  assertContains('migration 2: repo_stars_history table', sql, 'CREATE TABLE IF NOT EXISTS repo_stars_history');
+  assertContains('migration 2: UNIQUE constraint', sql, 'UNIQUE(full_name, crawl_date)');
+  assertContains('migration 2: stars column', sql, 'stars');
+  assertContains('migration 2: forks column', sql, 'forks');
 }
 
 // ── Suite 5: GitHub Actions 配置校验 ───────────────────────────────
