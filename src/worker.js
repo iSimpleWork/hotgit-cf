@@ -61,11 +61,15 @@ export default {
     if (path === '/repos')        return pageRepos(request, env);
     if (path === '/forceupdate')  return pageForceUpdate(env);
     
-    // SEO 静态化路由 /repo/owner%2Frepo -> /repo/owner/repo
+    // SEO 静态化路由 /repo/owner/repo 或 /repo/owner%2Frepo
     const repoMatch = path.match(/^\/repo\/([^\/]+)\/([^\/]+)$/);
     if (repoMatch) {
-      const owner = decodeURIComponent(repoMatch[1]);
-      const name = decodeURIComponent(repoMatch[2]);
+      let owner = repoMatch[1];
+      let name = repoMatch[2];
+      try { owner = decodeURIComponent(owner); } catch(e) {}
+      try { name = decodeURIComponent(name); } catch(e) {}
+      const fullName = `${owner}/${name}`;
+      console.log('[repo] path:', path, '-> fullName:', fullName);
       return pageRepoDetail(env, owner, name);
     }
     if (path === '/sitemap.xml') return pageSitemap(env);
@@ -389,19 +393,23 @@ async function getLanguages(db, category, crawlDate) {
 
 async function getRepoByName(db, fullName, crawlDate) {
   if (!crawlDate) crawlDate = await getLatestDate(db);
+  console.log('[getRepoByName] fullName:', fullName, 'crawlDate:', crawlDate);
   if (!crawlDate) return null;
   const rows = await db.prepare(
     'SELECT * FROM repos WHERE crawl_date = ? AND full_name = ?'
   ).bind(crawlDate, fullName).all();
+  console.log('[getRepoByName] found:', rows.results.length, 'on', crawlDate);
   if (rows.results.length > 0) return rows.results[0];
   // 如果当天没有，查询最近有数据的一天
   const latestRow = await db.prepare(
     'SELECT crawl_date FROM repos WHERE full_name = ? ORDER BY crawl_date DESC LIMIT 1'
   ).bind(fullName).first();
+  console.log('[getRepoByName] latestRow:', latestRow);
   if (!latestRow) return null;
   const rows2 = await db.prepare(
     'SELECT * FROM repos WHERE crawl_date = ? AND full_name = ?'
   ).bind(latestRow.crawl_date, fullName).all();
+  console.log('[getRepoByName] found on latest:', rows2.results.length);
   return rows2.results[0] || null;
 }
 
