@@ -150,11 +150,11 @@ function sinceDate(days) {
 /** 爬取所有榜单 */
 async function fetchAll(githubToken) {
   const tasks = [
-    { name: 'top_stars',    fn: () => githubSearch('stars:>1000',                        'stars',  githubToken) },
-    { name: 'top_forks',    fn: () => githubSearch('forks:>500',                         'forks',  githubToken) },
-    { name: 'star_daily',   fn: () => githubSearch(`pushed:>${sinceDate(1)}  stars:>10`, 'stars',  githubToken) },
-    { name: 'star_weekly',  fn: () => githubSearch(`pushed:>${sinceDate(7)}  stars:>10`, 'stars',  githubToken) },
-    { name: 'star_monthly', fn: () => githubSearch(`pushed:>${sinceDate(30)} stars:>10`, 'stars',  githubToken) },
+    { name: 'top_stars',    fn: () => githubSearch('stars:>1000',           'stars', githubToken) },
+    { name: 'top_forks',    fn: () => githubSearch('forks:>500',            'forks', githubToken) },
+    { name: 'star_daily',   fn: () => githubSearch('stars:>100',            'stars', githubToken) },
+    { name: 'star_weekly',  fn: () => githubSearch('stars:>100',             'stars', githubToken) },
+    { name: 'star_monthly', fn: () => githubSearch('stars:>100',              'stars', githubToken) },
   ];
 
   const result = {};
@@ -355,8 +355,10 @@ async function queryRepos(db, { category, crawlDate, page, perPage, lang, search
         const bIncr = b.stars_incr ?? -Infinity;
         return bIncr - aIncr;
       });
-      data = data.map((r, i) => ({ ...r, rank: i + 1 }));
+    } else {
+      data.sort((a, b) => b.stars - a.stars);
     }
+    data = data.map((r, i) => ({ ...r, rank: i + 1 }));
   }
 
   const total = data.length;
@@ -550,11 +552,13 @@ async function pageRepos(request, env) {
     const pushedDate = repo.pushed_at ? repo.pushed_at.slice(0,10) : '—';
     
     let starsDisplay, forksDisplay;
-    if (isIncrement && repo.stars_incr !== undefined) {
+    if (isIncrement && repo.stars_incr !== undefined && repo.stars_incr !== null) {
       const incrClass = repo.stars_incr > 0 ? 'incr-pos' : repo.stars_incr < 0 ? 'incr-neg' : '';
       const incrSign = repo.stars_incr > 0 ? '+' : '';
       starsDisplay = `<span class="${incrClass}">⭐ ${fmtNum(repo.stars)} <span class="incr">(${incrSign}${fmtNum(repo.stars_incr)})</span></span>`;
-      forksDisplay = repo.forks_incr !== undefined ? `<span class="${repo.forks_incr > 0 ? 'incr-pos' : repo.forks_incr < 0 ? 'incr-neg' : ''}">🍴 ${fmtNum(repo.forks)} <span class="incr">(${repo.forks_incr > 0 ? '+' : ''}${fmtNum(repo.forks_incr)})</span></span>` : `<span>🍴 ${fmtNum(repo.forks)}</span>`;
+      forksDisplay = repo.forks_incr !== undefined && repo.forks_incr !== null 
+        ? `<span class="${repo.forks_incr > 0 ? 'incr-pos' : repo.forks_incr < 0 ? 'incr-neg' : ''}">🍴 ${fmtNum(repo.forks)} <span class="incr">(${repo.forks_incr > 0 ? '+' : ''}${fmtNum(repo.forks_incr)})</span></span>` 
+        : `<span>🍴 ${fmtNum(repo.forks)}</span>`;
     } else {
       starsDisplay = `<span>⭐ ${fmtNum(repo.stars)}</span>`;
       forksDisplay = `<span>🍴 ${fmtNum(repo.forks)}</span>`;
@@ -632,11 +636,11 @@ async function pageForceUpdate(env) {
 
   // 逐个分类爬取，记录结果（不改变按天记录的逻辑，saveRepos 会覆盖今天同类数据）
   const tasks = [
-    { name: 'top_stars',    label: CATEGORY_LABELS.top_stars,    fn: () => githubSearch('stars:>1000',                        'stars',  env.GITHUB_TOKEN || '') },
-    { name: 'top_forks',    label: CATEGORY_LABELS.top_forks,    fn: () => githubSearch('forks:>500',                         'forks',  env.GITHUB_TOKEN || '') },
-    { name: 'star_daily',   label: CATEGORY_LABELS.star_daily,   fn: () => githubSearch(`pushed:>${sinceDate(1)}  stars:>10`, 'stars',  env.GITHUB_TOKEN || '') },
-    { name: 'star_weekly',  label: CATEGORY_LABELS.star_weekly,  fn: () => githubSearch(`pushed:>${sinceDate(7)}  stars:>10`, 'stars',  env.GITHUB_TOKEN || '') },
-    { name: 'star_monthly', label: CATEGORY_LABELS.star_monthly, fn: () => githubSearch(`pushed:>${sinceDate(30)} stars:>10`, 'stars',  env.GITHUB_TOKEN || '') },
+    { name: 'top_stars',    label: CATEGORY_LABELS.top_stars,    fn: () => githubSearch('stars:>1000',           'stars', env.GITHUB_TOKEN || '') },
+    { name: 'top_forks',    label: CATEGORY_LABELS.top_forks,    fn: () => githubSearch('forks:>500',            'forks', env.GITHUB_TOKEN || '') },
+    { name: 'star_daily',   label: CATEGORY_LABELS.star_daily,   fn: () => githubSearch('stars:>100',             'stars', env.GITHUB_TOKEN || '') },
+    { name: 'star_weekly',  label: CATEGORY_LABELS.star_weekly,  fn: () => githubSearch('stars:>100',            'stars', env.GITHUB_TOKEN || '') },
+    { name: 'star_monthly', label: CATEGORY_LABELS.star_monthly, fn: () => githubSearch('stars:>100',             'stars', env.GITHUB_TOKEN || '') },
   ];
 
   for (const task of tasks) {
