@@ -440,8 +440,9 @@ async function getRelatedRepos(db, language, excludeFullName, crawlDate, limit =
   if (!crawlDate) crawlDate = await getLatestDate(db);
   if (!crawlDate) return [];
   const rows = await db.prepare(
-    'SELECT * FROM repos WHERE crawl_date = ? AND language = ? AND full_name != ? GROUP BY full_name ORDER BY stars DESC LIMIT ?'
+    'SELECT full_name, MAX(stars) as stars, MAX(forks) as forks, MAX(html_url) as html_url, MAX(description) as description, MAX(language) as language, MAX(pushed_at) as pushed_at, MAX(topics) as topics, MAX(homepage) as homepage, MAX(open_issues) as open_issues, MAX(rank) as rank, MAX(id) as id FROM repos WHERE crawl_date = ? AND language = ? AND full_name != ? GROUP BY full_name ORDER BY stars DESC LIMIT ?'
   ).bind(crawlDate, language, excludeFullName, limit).all();
+  console.log('[getRelatedRepos] found:', rows.results.length, 'language:', language);
   if (rows.results.length > 0) return rows.results;
   // 如果当天没有，查询最近有数据的一天
   const latestRow = await db.prepare(
@@ -449,7 +450,7 @@ async function getRelatedRepos(db, language, excludeFullName, crawlDate, limit =
   ).bind(language).first();
   if (!latestRow) return [];
   const rows2 = await db.prepare(
-    'SELECT * FROM repos WHERE crawl_date = ? AND language = ? AND full_name != ? GROUP BY full_name ORDER BY stars DESC LIMIT ?'
+    'SELECT full_name, MAX(stars) as stars, MAX(forks) as forks, MAX(html_url) as html_url, MAX(description) as description, MAX(language) as language, MAX(pushed_at) as pushed_at, MAX(topics) as topics, MAX(homepage) as homepage, MAX(open_issues) as open_issues, MAX(rank) as rank, MAX(id) as id FROM repos WHERE crawl_date = ? AND language = ? AND full_name != ? GROUP BY full_name ORDER BY stars DESC LIMIT ?'
   ).bind(latestRow.crawl_date, language, excludeFullName, limit).all();
   return rows2.results;
 }
@@ -457,7 +458,7 @@ async function getRelatedRepos(db, language, excludeFullName, crawlDate, limit =
 async function getRepoHistory(db, fullName, days = 30) {
   try {
     const rows = await db.prepare(
-      'SELECT crawl_date, stars, forks FROM repo_stars_history WHERE full_name = ? ORDER BY crawl_date DESC LIMIT ?'
+      'SELECT crawl_date, stars, forks FROM repos WHERE full_name = ? GROUP BY crawl_date ORDER BY crawl_date DESC LIMIT ?'
     ).bind(fullName, days).all();
     console.log('[getRepoHistory]', fullName, 'found:', rows.results.length);
     return rows.results.reverse();
