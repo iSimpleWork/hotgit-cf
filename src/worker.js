@@ -72,6 +72,11 @@ export default {
       console.log('[repo] path:', path, '-> fullName:', fullName);
       return pageRepoDetail(env, owner, name);
     }
+    // ID 路由 /r/123
+    const idMatch = path.match(/^\/r\/(\d+)$/);
+    if (idMatch) {
+      return pageRepoDetailById(env, parseInt(idMatch[1]));
+    }
     if (path === '/sitemap.xml') return pageSitemap(env);
     if (path === '/robots.txt')  return pageRobots();
 
@@ -391,6 +396,24 @@ async function getLanguages(db, category, crawlDate) {
   return rows.results.map(r => r.language).filter(Boolean);
 }
 
+async function getRepoById(db, id, crawlDate) {
+  if (!crawlDate) crawlDate = await getLatestDate(db);
+  if (!crawlDate) return null;
+  const rows = await db.prepare(
+    'SELECT * FROM repos WHERE crawl_date = ? AND id = ?'
+  ).bind(crawlDate, id).all();
+  if (rows.results.length > 0) return rows.results[0];
+  // 如果当天没有，查询最近有数据的一天
+  const latestRow = await db.prepare(
+    'SELECT crawl_date FROM repos WHERE id = ? ORDER BY crawl_date DESC LIMIT 1'
+  ).bind(id).first();
+  if (!latestRow) return null;
+  const rows2 = await db.prepare(
+    'SELECT * FROM repos WHERE crawl_date = ? AND id = ?'
+  ).bind(latestRow.crawl_date, id).all();
+  return rows2.results[0] || null;
+}
+
 async function getRepoByName(db, fullName, crawlDate) {
   if (!crawlDate) crawlDate = await getLatestDate(db);
   console.log('[getRepoByName] fullName:', fullName, 'crawlDate:', crawlDate);
@@ -627,13 +650,15 @@ async function pageRepos(request, env) {
       forksDisplay = `<span>🍴 ${fmtNum(repo.forks)}</span>`;
     }
     
-    const repoDetailUrl = `/repo/${encodeURIComponent(repo.full_name)}`;
+    const nameUrl = encodeURIComponent(repo.full_name);
+    const repoDetailUrl = `/repo/${nameUrl}`;
+    const repoIdUrl = `/r/${repo.id}`;
     return `
     <div class="repo-card">
       <div class="repo-rank">#${repo.rank}</div>
       <div class="repo-main">
         <div class="repo-title-line">
-          <a class="repo-name" href="${repoDetailUrl}">${escHtml(repo.full_name)}</a>
+          <a class="repo-name" href="${repoIdUrl}">${escHtml(repo.full_name)}</a>
           ${langBadge}
         </div>
         ${repo.description ? `<p class="repo-desc">${escHtml(repo.description)}</p>` : ''}
@@ -804,7 +829,7 @@ async function pageRepoDetail(env, owner, name) {
 
   const relatedHtml = related.length 
     ? `<section class="related-repos"><h2>同语言热门项目</h2><div class="repo-list">${related.map(r => `
-      <a class="repo-card" href="/repo/${encodeURIComponent(r.full_name)}">
+      <a class="repo-card" href="/r/${r.id}">
         <div class="repo-main">
           <div class="repo-title-line"><span class="repo-name">${escHtml(r.full_name)}</span></div>
           <div class="repo-meta"><span>⭐ ${fmtNum(r.stars)}</span><span>🍴 ${fmtNum(r.forks)}</span></div>
@@ -856,6 +881,20 @@ async function pageRepoDetail(env, owner, name) {
   return new Response(htmlContent, {
     headers: { 'Content-Type': 'text/html; charset=utf-8' }
   });
+}
+
+async function pageRepoDetailById(env, id) {
+  const repo = await getRepoById(env.DB, id);
+  
+  if (!repo) {
+    return html(`<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"/><title>仓库未找到 — HotGit</title></head>
+<body><h1>仓库未找到</h1><p>ID: ${id} 不在热门榜单中</p><a href="/">返回首页</a></body>
+</html>`, 404);
+  }
+
+  return pageRepoDetail(env, repo.full_name.split('/')[0], repo.full_name.split('/')[1]);
 }
 
 async function pageSitemap(env) {
