@@ -61,10 +61,12 @@ export default {
     if (path === '/repos')        return pageRepos(request, env);
     if (path === '/forceupdate')  return pageForceUpdate(env);
     
-    // SEO 静态化路由
+    // SEO 静态化路由 /repo/owner%2Frepo -> /repo/owner/repo
     const repoMatch = path.match(/^\/repo\/([^\/]+)\/([^\/]+)$/);
     if (repoMatch) {
-      return pageRepoDetail(env, repoMatch[1], repoMatch[2]);
+      const owner = decodeURIComponent(repoMatch[1]);
+      const name = decodeURIComponent(repoMatch[2]);
+      return pageRepoDetail(env, owner, name);
     }
     if (path === '/sitemap.xml') return pageSitemap(env);
     if (path === '/robots.txt')  return pageRobots();
@@ -391,7 +393,16 @@ async function getRepoByName(db, fullName, crawlDate) {
   const rows = await db.prepare(
     'SELECT * FROM repos WHERE crawl_date = ? AND full_name = ?'
   ).bind(crawlDate, fullName).all();
-  return rows.results[0] || null;
+  if (rows.results.length > 0) return rows.results[0];
+  // 如果当天没有，查询最近有数据的一天
+  const latestRow = await db.prepare(
+    'SELECT crawl_date FROM repos WHERE full_name = ? ORDER BY crawl_date DESC LIMIT 1'
+  ).bind(fullName).first();
+  if (!latestRow) return null;
+  const rows2 = await db.prepare(
+    'SELECT * FROM repos WHERE crawl_date = ? AND full_name = ?'
+  ).bind(latestRow.crawl_date, fullName).all();
+  return rows2.results[0] || null;
 }
 
 async function getRelatedRepos(db, language, excludeFullName, crawlDate, limit = 10) {
@@ -400,7 +411,16 @@ async function getRelatedRepos(db, language, excludeFullName, crawlDate, limit =
   const rows = await db.prepare(
     'SELECT * FROM repos WHERE crawl_date = ? AND language = ? AND full_name != ? ORDER BY stars DESC LIMIT ?'
   ).bind(crawlDate, language, excludeFullName, limit).all();
-  return rows.results;
+  if (rows.results.length > 0) return rows.results;
+  // 如果当天没有，查询最近有数据的一天
+  const latestRow = await db.prepare(
+    'SELECT crawl_date FROM repos WHERE language = ? ORDER BY crawl_date DESC LIMIT 1'
+  ).bind(language).first();
+  if (!latestRow) return [];
+  const rows2 = await db.prepare(
+    'SELECT * FROM repos WHERE crawl_date = ? AND language = ? AND full_name != ? ORDER BY stars DESC LIMIT ?'
+  ).bind(latestRow.crawl_date, language, excludeFullName, limit).all();
+  return rows2.results;
 }
 
 async function getAllRepoNames(db, limit = 1000) {
@@ -599,7 +619,7 @@ async function pageRepos(request, env) {
       forksDisplay = `<span>🍴 ${fmtNum(repo.forks)}</span>`;
     }
     
-    const repoDetailUrl = `/repo/${repo.full_name.replace('/', '%2F')}`;
+    const repoDetailUrl = `/repo/${encodeURIComponent(repo.full_name)}`;
     return `
     <div class="repo-card">
       <div class="repo-rank">#${repo.rank}</div>
@@ -776,7 +796,7 @@ async function pageRepoDetail(env, owner, name) {
 
   const relatedHtml = related.length 
     ? `<section class="related-repos"><h2>同语言热门项目</h2><div class="repo-list">${related.map(r => `
-      <a class="repo-card" href="/repo/${escHtml(r.full_name.replace('/', '%2F'))}">
+      <a class="repo-card" href="/repo/${encodeURIComponent(r.full_name)}">
         <div class="repo-main">
           <div class="repo-title-line"><span class="repo-name">${escHtml(r.full_name)}</span></div>
           <div class="repo-meta"><span>⭐ ${fmtNum(r.stars)}</span><span>🍴 ${fmtNum(r.forks)}</span></div>
@@ -784,7 +804,7 @@ async function pageRepoDetail(env, owner, name) {
       </a>`).join('')}</div></section>`
     : '';
 
-  const canonicalUrl = `https://hotgit-cf.linkai.workers.dev/repo/${owner}/${name}`;
+  const canonicalUrl = `https://hotgit-cf.linkai.workers.dev/repo/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`;
 
   const body = `
   ${repoLink}
