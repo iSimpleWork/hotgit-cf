@@ -317,12 +317,23 @@ async function queryRepos(db, { category, crawlDate, page, perPage, lang, search
 
   let rows;
   if (isIncrement && historyDate) {
-    rows = await db.prepare(
-      `SELECT r.*, h.stars AS history_stars, h.forks AS history_forks 
-       FROM repos r 
-       LEFT JOIN repo_stars_history h ON r.full_name = h.full_name AND h.crawl_date = ?
-       WHERE ${where}`
-    ).bind(historyDate, ...params).all();
+    try {
+      rows = await db.prepare(
+        `SELECT r.*, h.stars AS history_stars, h.forks AS history_forks 
+         FROM repos r 
+         LEFT JOIN repo_stars_history h ON r.full_name = h.full_name AND h.crawl_date = ?
+         WHERE ${where}`
+      ).bind(historyDate, ...params).all();
+    } catch (e) {
+      if (e.message.includes('no such table') || e.message.includes('repo_stars_history')) {
+        rows = await db.prepare(
+          `SELECT * FROM repos WHERE ${where}`
+        ).bind(...params).all();
+        rows.results = rows.results.map(r => ({ ...r, history_stars: null }));
+      } else {
+        throw e;
+      }
+    }
   } else {
     rows = await db.prepare(
       `SELECT * FROM repos WHERE ${where}`
@@ -334,11 +345,18 @@ async function queryRepos(db, { category, crawlDate, page, perPage, lang, search
   if (isIncrement && historyDate) {
     data = data.map(r => ({
       ...r,
-      stars_incr: r.history_stars ? r.stars - r.history_stars : r.stars,
-      forks_incr: r.history_forks ? r.forks - r.history_forks : r.forks,
+      stars_incr: r.history_stars !== null ? r.stars - r.history_stars : null,
+      forks_incr: r.history_forks !== null ? r.forks - r.history_forks : null,
     }));
-    data.sort((a, b) => b.stars_incr - a.stars_incr);
-    data = data.map((r, i) => ({ ...r, rank: i + 1 }));
+    const hasHistory = data.some(r => r.stars_incr !== null);
+    if (hasHistory) {
+      data.sort((a, b) => {
+        const aIncr = a.stars_incr ?? -Infinity;
+        const bIncr = b.stars_incr ?? -Infinity;
+        return bIncr - aIncr;
+      });
+      data = data.map((r, i) => ({ ...r, rank: i + 1 }));
+    }
   }
 
   const total = data.length;
