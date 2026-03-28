@@ -440,7 +440,7 @@ async function getRelatedRepos(db, language, excludeFullName, crawlDate, limit =
   if (!crawlDate) crawlDate = await getLatestDate(db);
   if (!crawlDate) return [];
   const rows = await db.prepare(
-    'SELECT * FROM repos WHERE crawl_date = ? AND language = ? AND full_name != ? ORDER BY stars DESC LIMIT ?'
+    'SELECT DISTINCT * FROM repos WHERE crawl_date = ? AND language = ? AND full_name != ? ORDER BY stars DESC LIMIT ?'
   ).bind(crawlDate, language, excludeFullName, limit).all();
   if (rows.results.length > 0) return rows.results;
   // 如果当天没有，查询最近有数据的一天
@@ -449,9 +449,16 @@ async function getRelatedRepos(db, language, excludeFullName, crawlDate, limit =
   ).bind(language).first();
   if (!latestRow) return [];
   const rows2 = await db.prepare(
-    'SELECT * FROM repos WHERE crawl_date = ? AND language = ? AND full_name != ? ORDER BY stars DESC LIMIT ?'
+    'SELECT DISTINCT * FROM repos WHERE crawl_date = ? AND language = ? AND full_name != ? ORDER BY stars DESC LIMIT ?'
   ).bind(latestRow.crawl_date, language, excludeFullName, limit).all();
   return rows2.results;
+}
+
+async function getRepoHistory(db, fullName, days = 30) {
+  const rows = await db.prepare(
+    'SELECT crawl_date, stars, forks FROM repo_stars_history WHERE full_name = ? ORDER BY crawl_date DESC LIMIT ?'
+  ).bind(fullName, days).all();
+  return rows.results.reverse();
 }
 
 async function getAllRepoNames(db, limit = 1000) {
@@ -798,11 +805,17 @@ async function pageRepoDetail(env, owner, name) {
 </html>`, 404);
   }
 
+  const history = await getRepoHistory(env.DB, fullName, 30);
   const related = await getRelatedRepos(env.DB, repo.language, fullName);
   const crawlDate = await getLatestDate(env.DB);
   
   const title = `${repo.full_name} — HotGit`;
   const description = repo.description || `${repo.full_name} - ${repo.language} 项目，⭐ ${fmtNum(repo.stars)} Stars`;
+  
+  const descEn = repo.description || '';
+  const isZh = /[\u4e00-\u9fa5]/.test(descEn);
+  const descZh = isZh ? descEn : '';
+  const descEnFinal = isZh ? '' : descEn;
   
   const repoLink = `
   <div class="repo-detail-header">
@@ -811,6 +824,7 @@ async function pageRepoDetail(env, owner, name) {
       ${repo.language && repo.language !== 'Unknown' ? `<span class="lang-badge">${escHtml(repo.language)}</span>` : ''}
     </h1>
     ${repo.description ? `<p class="repo-desc">${escHtml(repo.description)}</p>` : ''}
+    ${descZh && descEnFinal ? `<p class="repo-desc-en">${escHtml(descEnFinal)}</p>` : ''}
   </div>
   <div class="repo-stats">
     <div class="stat-item"><span class="stat-value">⭐ ${fmtNum(repo.stars)}</span><span class="stat-label">Stars</span></div>
@@ -825,6 +839,51 @@ async function pageRepoDetail(env, owner, name) {
 
   const topicsHtml = repo.topics 
     ? `<div class="repo-topics">${repo.topics.split(',').filter(Boolean).map(t => `<span class="topic-tag">${escHtml(t)}</span>`).join('')}</div>` 
+    : '';
+
+  const chartHtml = history.length > 1 
+    ? `<section class="trend-chart">
+      <h2>📈 趋势变化（近${history.length}天）</h2>
+      <div class="chart-container">
+        <canvas id="trendChart"></canvas>
+      </div>
+    </section>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+      const ctx = document.getElementById('trendChart').getContext('2d');
+      new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: ${JSON.stringify(history.map(h => h.crawl_date))},
+          datasets: [
+            {
+              label: 'Stars',
+              data: ${JSON.stringify(history.map(h => h.stars))},
+              borderColor: '#e3b341',
+              backgroundColor: 'rgba(227,179,65,0.1)',
+              fill: true,
+              tension: 0.3
+            },
+            {
+              label: 'Forks',
+              data: ${JSON.stringify(history.map(h => h.forks))},
+              borderColor: '#58a6ff',
+              backgroundColor: 'rgba(88,166,255,0.1)',
+              fill: true,
+              tension: 0.3
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          plugins: { legend: { labels: { color: '#e6edf3' } } },
+          scales: {
+            x: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } },
+            y: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } }
+          }
+        }
+      });
+    </script>`
     : '';
 
   const relatedHtml = related.length 
@@ -842,6 +901,7 @@ async function pageRepoDetail(env, owner, name) {
   const body = `
   ${repoLink}
   ${topicsHtml}
+  ${chartHtml}
   ${relatedHtml}`;
 
   const htmlContent = `<!DOCTYPE html>
@@ -1040,6 +1100,10 @@ a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 .related-repos .repo-title-line{display:flex;align-items:center;gap:.5rem;margin-bottom:.35rem}
 .related-repos .repo-name{font-size:1rem;font-weight:600}
 .related-repos .repo-meta{display:flex;gap:1rem;font-size:.82rem;color:var(--text-muted)}
+.repo-desc-en{color:var(--text-muted);font-size:.95rem;margin-top:.5rem;font-style:italic}
+.trend-chart{margin:2rem 0;padding:1.5rem;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius)}
+.trend-chart h2{font-size:1.2rem;margin-bottom:1rem;color:var(--text-muted)}
+.chart-container{position:relative;height:300px}
 .footer{border-top:1px solid var(--border);padding:1.25rem;text-align:center;font-size:.82rem;color:var(--text-muted);background:var(--bg-card)}
 @media(max-width:640px){.navbar{padding:0 1rem;gap:.75rem}.hero h1{font-size:1.5rem}.repo-card{flex-direction:column;gap:.5rem}.repo-rank{text-align:left}.repo-stats{gap:.75rem}.repo-stats .stat-item{min-width:80px;padding:.75rem}}
 `;
