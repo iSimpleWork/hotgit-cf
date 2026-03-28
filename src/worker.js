@@ -440,7 +440,7 @@ async function getRelatedRepos(db, language, excludeFullName, crawlDate, limit =
   if (!crawlDate) crawlDate = await getLatestDate(db);
   if (!crawlDate) return [];
   const rows = await db.prepare(
-    'SELECT DISTINCT * FROM repos WHERE crawl_date = ? AND language = ? AND full_name != ? ORDER BY stars DESC LIMIT ?'
+    'SELECT * FROM repos WHERE crawl_date = ? AND language = ? AND full_name != ? GROUP BY full_name ORDER BY stars DESC LIMIT ?'
   ).bind(crawlDate, language, excludeFullName, limit).all();
   if (rows.results.length > 0) return rows.results;
   // 如果当天没有，查询最近有数据的一天
@@ -449,7 +449,7 @@ async function getRelatedRepos(db, language, excludeFullName, crawlDate, limit =
   ).bind(language).first();
   if (!latestRow) return [];
   const rows2 = await db.prepare(
-    'SELECT DISTINCT * FROM repos WHERE crawl_date = ? AND language = ? AND full_name != ? ORDER BY stars DESC LIMIT ?'
+    'SELECT * FROM repos WHERE crawl_date = ? AND language = ? AND full_name != ? GROUP BY full_name ORDER BY stars DESC LIMIT ?'
   ).bind(latestRow.crawl_date, language, excludeFullName, limit).all();
   return rows2.results;
 }
@@ -459,6 +459,7 @@ async function getRepoHistory(db, fullName, days = 30) {
     const rows = await db.prepare(
       'SELECT crawl_date, stars, forks FROM repo_stars_history WHERE full_name = ? ORDER BY crawl_date DESC LIMIT ?'
     ).bind(fullName, days).all();
+    console.log('[getRepoHistory]', fullName, 'found:', rows.results.length);
     return rows.results.reverse();
   } catch (e) {
     console.log('[getRepoHistory] error:', e.message);
@@ -846,48 +847,52 @@ async function pageRepoDetail(env, owner, name) {
     ? `<div class="repo-topics">${repo.topics.split(',').filter(Boolean).map(t => `<span class="topic-tag">${escHtml(t)}</span>`).join('')}</div>` 
     : '';
 
-  const chartHtml = history.length > 1 
+  const chartHtml = history.length > 0 
     ? `<section class="trend-chart">
-      <h2>📈 趋势变化（近${history.length}天）</h2>
+      <h2>📈 趋势变化（${history.length}条数据）</h2>
       <div class="chart-container">
         <canvas id="trendChart"></canvas>
       </div>
     </section>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script>
-      const ctx = document.getElementById('trendChart').getContext('2d');
-      new Chart(ctx, {
-        type: 'line',
-        data: {
-          labels: ${JSON.stringify(history.map(h => h.crawl_date))},
-          datasets: [
-            {
-              label: 'Stars',
-              data: ${JSON.stringify(history.map(h => h.stars))},
-              borderColor: '#e3b341',
-              backgroundColor: 'rgba(227,179,65,0.1)',
-              fill: true,
-              tension: 0.3
-            },
-            {
-              label: 'Forks',
-              data: ${JSON.stringify(history.map(h => h.forks))},
-              borderColor: '#58a6ff',
-              backgroundColor: 'rgba(88,166,255,0.1)',
-              fill: true,
-              tension: 0.3
+      try {
+        const ctx = document.getElementById('trendChart').getContext('2d');
+        new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels: ${JSON.stringify(history.map(h => h.crawl_date))},
+            datasets: [
+              {
+                label: 'Stars',
+                data: ${JSON.stringify(history.map(h => h.stars))},
+                borderColor: '#e3b341',
+                backgroundColor: 'rgba(227,179,65,0.1)',
+                fill: true,
+                tension: 0.3
+              },
+              {
+                label: 'Forks',
+                data: ${JSON.stringify(history.map(h => h.forks))},
+                borderColor: '#58a6ff',
+                backgroundColor: 'rgba(88,166,255,0.1)',
+                fill: true,
+                tension: 0.3
+              }
+            ]
+          },
+          options: {
+            responsive: true,
+            plugins: { legend: { labels: { color: '#e6edf3' } } },
+            scales: {
+              x: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } },
+              y: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } }
             }
-          ]
-        },
-        options: {
-          responsive: true,
-          plugins: { legend: { labels: { color: '#e6edf3' } } },
-          scales: {
-            x: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } },
-            y: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } }
           }
-        }
-      });
+        });
+      } catch(e) {
+        console.error('Chart error:', e);
+      }
     </script>`
     : '';
 
