@@ -599,12 +599,13 @@ async function pageRepos(request, env) {
       forksDisplay = `<span>🍴 ${fmtNum(repo.forks)}</span>`;
     }
     
+    const repoDetailUrl = `/repo/${repo.full_name.replace('/', '%2F')}`;
     return `
     <div class="repo-card">
       <div class="repo-rank">#${repo.rank}</div>
       <div class="repo-main">
         <div class="repo-title-line">
-          <a class="repo-name" href="${escHtml(repo.html_url)}" target="_blank" rel="noopener">${escHtml(repo.full_name)}</a>
+          <a class="repo-name" href="${repoDetailUrl}">${escHtml(repo.full_name)}</a>
           ${langBadge}
         </div>
         ${repo.description ? `<p class="repo-desc">${escHtml(repo.description)}</p>` : ''}
