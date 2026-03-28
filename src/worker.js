@@ -455,10 +455,15 @@ async function getRelatedRepos(db, language, excludeFullName, crawlDate, limit =
 }
 
 async function getRepoHistory(db, fullName, days = 30) {
-  const rows = await db.prepare(
-    'SELECT crawl_date, stars, forks FROM repo_stars_history WHERE full_name = ? ORDER BY crawl_date DESC LIMIT ?'
-  ).bind(fullName, days).all();
-  return rows.results.reverse();
+  try {
+    const rows = await db.prepare(
+      'SELECT crawl_date, stars, forks FROM repo_stars_history WHERE full_name = ? ORDER BY crawl_date DESC LIMIT ?'
+    ).bind(fullName, days).all();
+    return rows.results.reverse();
+  } catch (e) {
+    console.log('[getRepoHistory] error:', e.message);
+    return [];
+  }
 }
 
 async function getAllRepoNames(db, limit = 1000) {
