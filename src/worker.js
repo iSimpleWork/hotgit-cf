@@ -313,8 +313,13 @@ async function logCrawl(db, crawlDate, category, count, status, message) {
 }
 
 async function getLatestDate(db) {
-  const row = await db.prepare('SELECT MAX(crawl_date) AS d FROM repos').first();
-  return row?.d || null;
+  try {
+    const row = await db.prepare('SELECT MAX(crawl_date) AS d FROM repos').first();
+    return row?.d || null;
+  } catch (e) {
+    console.error('[getLatestDate] error:', e.message);
+    return null;
+  }
 }
 
 async function getStats(db) {
@@ -346,53 +351,51 @@ function getHistoryDate(crawlDate, daysAgo) {
 }
 
 async function queryRepos(db, { category, crawlDate, page, perPage, lang, search }) {
-  if (!crawlDate) crawlDate = await getLatestDate(db);
-  if (!crawlDate) return { total: 0, page, per_page: perPage, data: [] };
+  try {
+    if (!crawlDate) crawlDate = await getLatestDate(db);
+    if (!crawlDate) return { total: 0, page, per_page: perPage, data: [] };
 
-  const isDaily = category === 'star_daily';
-  const isWeekly = category === 'star_weekly';
-  const isMonthly = category === 'star_monthly';
-  const isIncrement = isDaily || isWeekly || isMonthly;
+    const isDaily = category === 'star_daily';
+    const isWeekly = category === 'star_weekly';
+    const isMonthly = category === 'star_monthly';
+    const isIncrement = isDaily || isWeekly || isMonthly;
 
-  let historyDate = null;
-  if (isDaily) historyDate = getHistoryDate(crawlDate, 1);
-  else if (isWeekly) historyDate = getHistoryDate(crawlDate, 7);
-  else if (isMonthly) historyDate = getHistoryDate(crawlDate, 30);
+    let historyDate = null;
+    if (isDaily) historyDate = getHistoryDate(crawlDate, 1);
+    else if (isWeekly) historyDate = getHistoryDate(crawlDate, 7);
+    else if (isMonthly) historyDate = getHistoryDate(crawlDate, 30);
 
-  const conditions = ['crawl_date = ?', 'category = ?'];
-  const params     = [crawlDate, category];
+    const conditions = ['crawl_date = ?', 'category = ?'];
+    const params     = [crawlDate, category];
 
-  if (lang)   { conditions.push('language = ?');                     params.push(lang); }
-  if (search) { conditions.push('(full_name LIKE ? OR description LIKE ?)'); params.push(`%${search}%`, `%${search}%`); }
+    if (lang)   { conditions.push('language = ?');                     params.push(lang); }
+    if (search) { conditions.push('(full_name LIKE ? OR description LIKE ?)'); params.push(`%${search}%`, `%${search}%`); }
 
-  const where = conditions.join(' AND ');
+    const where = conditions.join(' AND ');
 
-  let rows;
-  if (isIncrement && historyDate) {
-    try {
-      rows = await db.prepare(
-        `SELECT r.*, h.stars AS history_stars, h.forks AS history_forks 
-         FROM repos r 
-         LEFT JOIN repo_stars_history h ON r.full_name = h.full_name AND h.crawl_date = ?
-         WHERE ${where}`
-      ).bind(historyDate, ...params).all();
-    } catch (e) {
-      if (e.message.includes('no such table') || e.message.includes('repo_stars_history')) {
+    let rows;
+    if (isIncrement && historyDate) {
+      try {
+        rows = await db.prepare(
+          `SELECT r.*, h.stars AS history_stars, h.forks AS history_forks 
+           FROM repos r 
+           LEFT JOIN repo_stars_history h ON r.full_name = h.full_name AND h.crawl_date = ?
+           WHERE ${where}`
+        ).bind(historyDate, ...params).all();
+      } catch (e) {
+        console.error('[queryRepos] history query error:', e.message);
         rows = await db.prepare(
           `SELECT * FROM repos WHERE ${where}`
         ).bind(...params).all();
-        rows.results = rows.results.map(r => ({ ...r, history_stars: null }));
-      } else {
-        throw e;
+        rows.results = rows.results.map(r => ({ ...r, history_stars: null, history_forks: null }));
       }
+    } else {
+      rows = await db.prepare(
+        `SELECT * FROM repos WHERE ${where}`
+      ).bind(...params).all();
     }
-  } else {
-    rows = await db.prepare(
-      `SELECT * FROM repos WHERE ${where}`
-    ).bind(...params).all();
-  }
 
-  let data = rows.results;
+    let data = rows.results;
 
   if (isIncrement && historyDate) {
     data = data.map(r => ({
@@ -418,6 +421,10 @@ async function queryRepos(db, { category, crawlDate, page, perPage, lang, search
   data = data.slice(offset, offset + perPage);
 
   return { total, page, per_page: perPage, data };
+  } catch (e) {
+    console.error('[queryRepos] error:', e.message);
+    return { total: 0, page, per_page: perPage, data: [] };
+  }
 }
 
 async function getLanguages(db, category, crawlDate) {
