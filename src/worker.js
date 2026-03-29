@@ -824,6 +824,7 @@ async function pageForceUpdate(env) {
     try {
       const items = await task.fn();
       const repos = items.slice(0, 100).map((r, i) => fmtRepo(r, task.name, i + 1));
+      await translateAndSaveRepos(env.DB, repos);
       await saveRepos(env.DB, repos, today);
       await logCrawl(env.DB, today, task.name, repos.length, 'ok', '');
       results.push({ name: task.name, label: task.label, count: repos.length, ok: true, ms: Date.now() - t0 });
