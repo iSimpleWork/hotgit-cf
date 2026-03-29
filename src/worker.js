@@ -374,20 +374,12 @@ async function queryRepos(db, { category, crawlDate, page, perPage, lang, search
 
     let rows;
     if (isIncrement && historyDate) {
-      try {
-        rows = await db.prepare(
-          `SELECT r.*, h.stars AS history_stars, h.forks AS history_forks 
-           FROM repos r 
-           LEFT JOIN repo_stars_history h ON r.full_name = h.full_name AND h.crawl_date = ?
-           WHERE ${where}`
-        ).bind(historyDate, ...params).all();
-      } catch (e) {
-        console.error('[queryRepos] history query error:', e.message);
-        rows = await db.prepare(
-          `SELECT * FROM repos WHERE ${where}`
-        ).bind(...params).all();
-        rows.results = rows.results.map(r => ({ ...r, history_stars: null, history_forks: null }));
-      }
+      rows = await db.prepare(
+        `SELECT r.*, h.stars AS history_stars, h.forks AS history_forks 
+         FROM repos r 
+         LEFT JOIN repos h ON r.full_name = h.full_name AND h.crawl_date = ? AND h.category = r.category
+         WHERE ${where}`
+      ).bind(historyDate, ...params).all();
     } else {
       rows = await db.prepare(
         `SELECT * FROM repos WHERE ${where}`
