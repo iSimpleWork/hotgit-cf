@@ -233,6 +233,8 @@ async function runCrawl(env) {
 
   for (const [category, repos] of Object.entries(allRepos)) {
     try {
+      // 先翻译并保存
+      await translateAndSaveRepos(env.DB, repos);
       await saveRepos(env.DB, repos, today);
       await logCrawl(env.DB, today, category, repos.length, 'ok', '');
       console.log(`[crawl] ${category}: ${repos.length} saved`);
@@ -262,15 +264,38 @@ async function saveRepos(db, repos, crawlDate) {
     db.prepare(`
       INSERT INTO repos
         (crawl_date, category, rank, full_name, html_url, description,
-         language, stars, forks, open_issues, pushed_at, topics, homepage)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+         language, stars, forks, open_issues, pushed_at, topics, homepage,
+         translated_name, translated_desc)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).bind(
       crawlDate, r.category, r.rank, r.full_name, r.html_url,
       r.description, r.language, r.stars, r.forks, r.open_issues,
-      r.pushed_at, r.topics, r.homepage
+      r.pushed_at, r.topics, r.homepage,
+      r.translated_name || '', r.translated_desc || ''
     )
   );
   await db.batch(stmts);
+}
+
+async function translateAndSaveRepos(db, repos) {
+  for (const r of repos) {
+    const nameText = r.full_name || '';
+    const descText = r.description || '';
+    const isZh = /[\u4e00-\u9fa5]/.test(descText) || /[\u4e00-\u9fa5]/.test(nameText);
+    const targetLang = isZh ? 'en' : 'zh';
+    
+    if (nameText && !r.translated_name) {
+      const nameToTranslate = nameText.split('/')[1] || nameText;
+      r.translated_name = await translateText(db, nameToTranslate, targetLang);
+    }
+    
+    if (descText && !r.translated_desc) {
+      r.translated_desc = await translateText(db, descText, targetLang);
+    }
+    
+    // 间隔避免 API 限流
+    await new Promise(x => setTimeout(x, 200));
+  }
 }
 
 async function logCrawl(db, crawlDate, category, count, status, message) {
@@ -466,6 +491,54 @@ async function getRepoHistory(db, fullName, days = 30) {
     console.log('[getRepoHistory] error:', e.message);
     return [];
   }
+}
+
+async function getCachedTranslation(db, textHash, targetLang) {
+  const row = await db.prepare(
+    'SELECT translated_text FROM translations WHERE text_hash = ? AND target_lang = ? AND created_at > datetime("now", "-1 day")'
+  ).bind(textHash, targetLang).first();
+  return row?.translated_text || null;
+}
+
+async function saveTranslation(db, textHash, targetLang, translatedText) {
+  await db.prepare(
+    'INSERT OR REPLACE INTO translations (text_hash, target_lang, translated_text, created_at) VALUES (?, ?, ?, datetime("now"))'
+  ).bind(textHash, targetLang, translatedText).run();
+}
+
+function hashString(str) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  return String(hash);
+}
+
+async function translateText(db, text, targetLang = 'en') {
+  if (!text || text.length < 3) return null;
+  const sourceLang = /[\u4e00-\u9fa5]/.test(text) ? 'zh' : 'en';
+  if (sourceLang === targetLang) return null;
+  
+  const textHash = hashString(text);
+  const cached = await getCachedTranslation(db, textHash, targetLang);
+  if (cached) return cached;
+  
+  try {
+    const langPair = `${sourceLang}|${targetLang}`;
+    const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text.slice(0, 500))}&langpair=${langPair}`;
+    const res = await fetch(url);
+    const data = await res.json();
+    if (data.responseStatus === 200 && data.responseData?.translatedText) {
+      const translatedText = data.responseData.translatedText;
+      await saveTranslation(db, textHash, targetLang, translatedText);
+      return translatedText;
+    }
+  } catch (e) {
+    console.log('[translate] error:', e.message);
+  }
+  return null;
 }
 
 async function getAllRepoNames(db, limit = 1000) {
@@ -819,10 +892,8 @@ async function pageRepoDetail(env, owner, name) {
   const title = `${repo.full_name} — HotGit`;
   const description = repo.description || `${repo.full_name} - ${repo.language} 项目，⭐ ${fmtNum(repo.stars)} Stars`;
   
-  const descEn = repo.description || '';
-  const isZh = /[\u4e00-\u9fa5]/.test(descEn);
-  const descZh = isZh ? descEn : '';
-  const descEnFinal = isZh ? '' : descEn;
+  const translatedName = repo.translated_name || '';
+  const translatedDesc = repo.translated_desc || '';
   
   const repoLink = `
   <div class="repo-detail-header">
@@ -830,8 +901,9 @@ async function pageRepoDetail(env, owner, name) {
       <a href="${escHtml(repo.html_url)}" target="_blank" rel="noopener">${escHtml(repo.full_name)}</a>
       ${repo.language && repo.language !== 'Unknown' ? `<span class="lang-badge">${escHtml(repo.language)}</span>` : ''}
     </h1>
+    ${translatedName ? `<p class="repo-name-trans">🌐 ${escHtml(translatedName)}</p>` : ''}
     ${repo.description ? `<p class="repo-desc">${escHtml(repo.description)}</p>` : ''}
-    ${descZh && descEnFinal ? `<p class="repo-desc-en">${escHtml(descEnFinal)}</p>` : ''}
+    ${translatedDesc ? `<p class="repo-desc-trans">🌐 ${escHtml(translatedDesc)}</p>` : ''}
   </div>
   <div class="repo-stats">
     <div class="stat-item"><span class="stat-value">⭐ ${fmtNum(repo.stars)}</span><span class="stat-label">Stars</span></div>
@@ -1111,7 +1183,7 @@ a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 .related-repos .repo-title-line{display:flex;align-items:center;gap:.5rem;margin-bottom:.35rem}
 .related-repos .repo-name{font-size:1rem;font-weight:600}
 .related-repos .repo-meta{display:flex;gap:1rem;font-size:.82rem;color:var(--text-muted)}
-.repo-desc-en{color:var(--text-muted);font-size:.95rem;margin-top:.5rem;font-style:italic}
+.repo-desc-trans{color:var(--text-muted);font-size:.95rem;margin-top:.5rem}
 .trend-chart{margin:2rem 0;padding:1.5rem;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius)}
 .trend-chart h2{font-size:1.2rem;margin-bottom:1rem;color:var(--text-muted)}
 .chart-container{position:relative;height:300px}
