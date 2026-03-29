@@ -17,6 +17,7 @@
 // ── 常量 ───────────────────────────────────────────────────────────────
 const GITHUB_API   = 'https://api.github.com';
 const USER_AGENT   = 'hotgit-cf/1.0 (https://github.com/hotgit)';
+const DOMAIN       = 'hotgit-cf.linkai.workers.dev'; // 申请域名后修改这里
 
 const CATEGORY_LABELS = {
   top_stars:    '⭐ Star 总榜',
@@ -998,7 +999,7 @@ async function pageRepoDetail(env, owner, name) {
       </a>`).join('')}</div></section>`
     : '';
 
-  const canonicalUrl = `https://hotgit-cf.linkai.workers.dev/repo/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`;
+  const canonicalUrl = `https://${DOMAIN}/repo/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`;
 
   const body = `
   ${repoLink}
@@ -1060,7 +1061,7 @@ async function pageRepoDetailById(env, id) {
 }
 
 async function pageSitemap(env) {
-  const host = 'https://hotgit-cf.linkai.workers.dev';
+  const host = `https://${DOMAIN}`;
   const repoNames = await getAllRepoNames(env.DB);
   const dates = await getCrawlDates(env.DB);
   
@@ -1092,7 +1093,7 @@ function pageRobots() {
   const robots = `User-agent: *
 Allow: /
 
-Sitemap: https://hotgit-cf.linkai.workers.dev/sitemap.xml
+Sitemap: https://${DOMAIN}/sitemap.xml
 `;
   return new Response(robots, {
     headers: { 'Content-Type': 'text/plain; charset=utf-8' }
