@@ -17,7 +17,13 @@
 // ── 常量 ───────────────────────────────────────────────────────────────
 const GITHUB_API   = 'https://api.github.com';
 const USER_AGENT   = 'hotgit-cf/1.0 (https://github.com/hotgit)';
-const DOMAIN       = 'hotgit-cf.linkai.workers.dev'; // 申请域名后修改这里
+const DEFAULT_DOMAIN = 'hotgit-cf.linkai.workers.dev';
+
+let DOMAIN = DEFAULT_DOMAIN;
+
+function getDomain(env) {
+  return env.DOMAIN || DOMAIN;
+}
 
 const CATEGORY_LABELS = {
   top_stars:    '⭐ Star 总榜',
@@ -79,7 +85,7 @@ export default {
       return pageRepoDetailById(env, parseInt(idMatch[1]));
     }
     if (path === '/sitemap.xml') return pageSitemap(env);
-    if (path === '/robots.txt')  return pageRobots();
+    if (path === '/robots.txt')  return pageRobots(env);
 
     return new Response('Not Found', { status: 404 });
   },
@@ -999,7 +1005,8 @@ async function pageRepoDetail(env, owner, name) {
       </a>`).join('')}</div></section>`
     : '';
 
-  const canonicalUrl = `https://${DOMAIN}/repo/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`;
+  const domain = getDomain(env);
+  const canonicalUrl = `https://${domain}/repo/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`;
 
   const body = `
   ${repoLink}
@@ -1061,7 +1068,8 @@ async function pageRepoDetailById(env, id) {
 }
 
 async function pageSitemap(env) {
-  const host = `https://${DOMAIN}`;
+  const domain = getDomain(env);
+  const host = `https://${domain}`;
   const repoNames = await getAllRepoNames(env.DB);
   const dates = await getCrawlDates(env.DB);
   
@@ -1089,11 +1097,12 @@ async function pageSitemap(env) {
   });
 }
 
-function pageRobots() {
+function pageRobots(env) {
+  const domain = getDomain(env);
   const robots = `User-agent: *
 Allow: /
 
-Sitemap: https://${DOMAIN}/sitemap.xml
+Sitemap: https://${domain}/sitemap.xml
 `;
   return new Response(robots, {
     headers: { 'Content-Type': 'text/plain; charset=utf-8' }

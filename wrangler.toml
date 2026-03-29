@@ -22,3 +22,4 @@ crons = ["0 20 * * *"]
 # ADMIN_TOKEN    → wrangler secret put ADMIN_TOKEN（可选）
 [vars]
 ENVIRONMENT = "production"
+DOMAIN = "hotgit-cf.linkai.workers.dev"
