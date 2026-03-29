@@ -64,7 +64,6 @@ export default {
     }
 
     // 页面路由
-    console.log('[route] path:', path);
     if (path === '/')             return pageIndex(env);
     if (path === '/repos')        return pageRepos(request, env);
     if (path === '/forceupdate')  return pageForceUpdate(env);
@@ -724,9 +723,7 @@ async function pageRepos(request, env) {
   const search    = q.get('search') || '';
   const crawlDate = q.get('date')   || await getLatestDate(env.DB);
 
-  console.log('[pageRepos] category:', category, 'crawlDate:', crawlDate);
   const result  = await queryRepos(env.DB, { category, crawlDate, page, perPage, lang, search });
-  console.log('[pageRepos] result.total:', result.total, 'data.length:', result.data.length);
   const langs   = await getLanguages(env.DB, category, crawlDate);
   const dates   = await getCrawlDates(env.DB);
 
