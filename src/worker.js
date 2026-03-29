@@ -374,6 +374,7 @@ async function queryRepos(db, { category, crawlDate, page, perPage, lang, search
 
     let rows;
     if (isIncrement && historyDate) {
+      console.log('[queryRepos] isIncrement=true, historyDate:', historyDate, 'crawlDate:', crawlDate);
       rows = await db.prepare(
         `SELECT r.*, h.stars AS history_stars, h.forks AS history_forks 
          FROM repos r 
