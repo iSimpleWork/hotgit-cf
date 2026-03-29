@@ -372,15 +372,16 @@ async function queryRepos(db, { category, crawlDate, page, perPage, lang, search
 
     const where = conditions.join(' AND ');
 
+    console.log('[queryRepos] category:', category, 'crawlDate:', crawlDate, 'historyDate:', historyDate, 'isIncrement:', isIncrement);
     let rows;
     if (isIncrement && historyDate) {
-      console.log('[queryRepos] isIncrement=true, historyDate:', historyDate, 'crawlDate:', crawlDate);
       rows = await db.prepare(
         `SELECT r.*, h.stars AS history_stars, h.forks AS history_forks 
          FROM repos r 
          LEFT JOIN repos h ON r.full_name = h.full_name AND h.crawl_date = ? AND h.category = r.category
          WHERE ${where}`
       ).bind(historyDate, ...params).all();
+      console.log('[queryRepos] rows with history:', rows.results?.length || 0);
     } else {
       rows = await db.prepare(
         `SELECT * FROM repos WHERE ${where}`
@@ -388,6 +389,7 @@ async function queryRepos(db, { category, crawlDate, page, perPage, lang, search
     }
 
     let data = rows.results;
+    console.log('[queryRepos] data.length:', data.length);
 
   if (isIncrement && historyDate) {
     data = data.map(r => ({
