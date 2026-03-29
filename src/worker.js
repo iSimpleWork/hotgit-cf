@@ -519,20 +519,38 @@ function hashString(str) {
 async function translateText(db, text, targetLang = 'en') {
   if (!text || text.length < 3) return null;
   const sourceLang = /[\u4e00-\u9fa5]/.test(text) ? 'zh' : 'en';
-  if (sourceLang === targetLang) return null;
+  if (sourceLang === targetLang) {
+    console.log('[translate] skip: source same as target', sourceLang);
+    return null;
+  }
   
   const textHash = hashString(text);
-  const cached = await getCachedTranslation(db, textHash, targetLang);
-  if (cached) return cached;
+  
+  // 尝试从缓存读取，忽略表不存在错误
+  try {
+    const cached = await getCachedTranslation(db, textHash, targetLang);
+    if (cached) {
+      console.log('[translate] cache hit:', textHash);
+      return cached;
+    }
+  } catch (e) {
+    console.log('[translate] cache read error (table may not exist):', e.message);
+  }
   
   try {
     const langPair = `${sourceLang}|${targetLang}`;
     const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text.slice(0, 500))}&langpair=${langPair}`;
+    console.log('[translate] calling API:', text.slice(0, 30), '->', targetLang);
     const res = await fetch(url);
     const data = await res.json();
+    console.log('[translate] API response:', JSON.stringify(data).slice(0, 100));
     if (data.responseStatus === 200 && data.responseData?.translatedText) {
       const translatedText = data.responseData.translatedText;
-      await saveTranslation(db, textHash, targetLang, translatedText);
+      try {
+        await saveTranslation(db, textHash, targetLang, translatedText);
+      } catch (e) {
+        console.log('[translate] save cache error:', e.message);
+      }
       return translatedText;
     }
   } catch (e) {
