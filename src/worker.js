@@ -632,11 +632,15 @@ async function apiDebug(env) {
        WHERE r.crawl_date = ? AND r.category = 'star_daily' LIMIT 5`
     ).bind(yesterday, latestDate).all();
     
+    // Test full queryRepos function
+    const result = await queryRepos(env.DB, { category: 'star_daily', crawlDate: latestDate, page: 1, perPage: 5, lang: '', search: '' });
+    
     return json({
       latestDate,
       yesterday,
       categories: rows.results,
-      dailySample: dailyRows.results
+      dailySample: dailyRows.results,
+      queryResult: result
     });
   } catch (e) {
     return json({ error: e.message }, 500);
