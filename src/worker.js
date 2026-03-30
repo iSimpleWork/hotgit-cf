@@ -374,15 +374,15 @@ async function queryRepos(db, { category, crawlDate, page, perPage, lang, search
 
     const where = conditions.join(' AND ');
 
-    console.log('[queryRepos] category:', category, 'crawlDate:', crawlDate, 'historyDate:', historyDate, 'isIncrement:', isIncrement);
+    console.log('[queryRepos] category:', category, 'crawlDate:', crawlDate, 'historyDate:', historyDate, 'isIncrement:', isIncrement, 'params:', params);
     let rows;
     if (isIncrement && historyDate) {
-      rows = await db.prepare(
-        `SELECT r.*, h.stars AS history_stars, h.forks AS history_forks 
+      const sql = `SELECT r.*, h.stars AS history_stars, h.forks AS history_forks 
          FROM repos r 
          LEFT JOIN repos h ON r.full_name = h.full_name AND h.crawl_date = ? AND h.category = r.category
-         WHERE ${where}`
-      ).bind(historyDate, ...params).all();
+         WHERE ${where}`;
+      console.log('[queryRepos] SQL:', sql, 'binds:', [historyDate, ...params]);
+      rows = await db.prepare(sql).bind(historyDate, ...params).all();
       console.log('[queryRepos] rows with history:', rows.results?.length || 0);
     } else {
       rows = await db.prepare(
