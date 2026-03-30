@@ -622,9 +622,21 @@ async function apiDebug(env) {
     const rows = await env.DB.prepare(
       'SELECT category, COUNT(*) as cnt FROM repos WHERE crawl_date = ? GROUP BY category'
     ).bind(latestDate).all();
+    
+    // Test star_daily query
+    const yesterday = getHistoryDate(latestDate, 1);
+    const dailyRows = await env.DB.prepare(
+      `SELECT r.*, h.stars AS history_stars 
+       FROM repos r 
+       LEFT JOIN repos h ON r.full_name = h.full_name AND h.crawl_date = ? AND h.category = r.category
+       WHERE r.crawl_date = ? AND r.category = 'star_daily' LIMIT 5`
+    ).bind(yesterday, latestDate).all();
+    
     return json({
       latestDate,
-      categories: rows.results
+      yesterday,
+      categories: rows.results,
+      dailySample: dailyRows.results
     });
   } catch (e) {
     return json({ error: e.message }, 500);
