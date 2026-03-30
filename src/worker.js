@@ -59,7 +59,6 @@ export default {
     if (path === '/api/repos')  return apiRepos(request, env);
     if (path === '/api/stats')  return apiStats(env);
     if (path === '/api/dates')  return apiDates(env);
-    if (path === '/api/debug')  return apiDebug(env);
     if (path === '/api/crawl' && request.method === 'POST') {
       return apiCrawl(request, env, ctx);
     }
@@ -315,7 +314,6 @@ async function logCrawl(db, crawlDate, category, count, status, message) {
 async function getLatestDate(db) {
   try {
     const row = await db.prepare('SELECT MAX(crawl_date) AS d FROM repos').first();
-    console.log('[getLatestDate] result:', row?.d);
     return row?.d || null;
   } catch (e) {
     console.error('[getLatestDate] error:', e.message);
@@ -611,38 +609,6 @@ async function apiStats(env) {
 
 async function apiDates(env) {
   return json(await getCrawlDates(env.DB));
-}
-
-async function apiDebug(env) {
-  const latestDate = await getLatestDate(env.DB);
-  const yesterday = getHistoryDate(latestDate, 1);
-  
-  // Test direct query
-  const dailyRows = await env.DB.prepare(
-    `SELECT r.*, h.stars AS history_stars 
-     FROM repos r 
-     LEFT JOIN repos h ON r.full_name = h.full_name AND h.crawl_date = ? AND h.category = r.category
-     WHERE r.crawl_date = ? AND r.category = 'star_daily' LIMIT 5`
-  ).bind(yesterday, latestDate).all();
-  
-  // Test queryRepos function
-  let queryResult;
-  let queryError;
-  try {
-    queryResult = await queryRepos(env.DB, { category: 'star_daily', crawlDate: latestDate, page: 1, perPage: 5, lang: '', search: '' });
-  } catch (e) {
-    queryError = e.message;
-    queryResult = null;
-  }
-  
-  return json({
-    latestDate,
-    yesterday,
-    directQueryWorks: dailyRows.results.length > 0,
-    directQuerySample: dailyRows.results[0],
-    queryResult,
-    queryError
-  });
 }
 
 async function apiCrawl(request, env, ctx) {
