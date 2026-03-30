@@ -617,34 +617,35 @@ async function apiDates(env) {
 }
 
 async function apiDebug(env) {
+  const latestDate = await getLatestDate(env.DB);
+  const yesterday = getHistoryDate(latestDate, 1);
+  
+  // Test direct query
+  const dailyRows = await env.DB.prepare(
+    `SELECT r.*, h.stars AS history_stars 
+     FROM repos r 
+     LEFT JOIN repos h ON r.full_name = h.full_name AND h.crawl_date = ? AND h.category = r.category
+     WHERE r.crawl_date = ? AND r.category = 'star_daily' LIMIT 5`
+  ).bind(yesterday, latestDate).all();
+  
+  // Test queryRepos function
+  let queryResult;
+  let queryError;
   try {
-    const latestDate = await getLatestDate(env.DB);
-    const rows = await env.DB.prepare(
-      'SELECT category, COUNT(*) as cnt FROM repos WHERE crawl_date = ? GROUP BY category'
-    ).bind(latestDate).all();
-    
-    // Test star_daily query
-    const yesterday = getHistoryDate(latestDate, 1);
-    const dailyRows = await env.DB.prepare(
-      `SELECT r.*, h.stars AS history_stars 
-       FROM repos r 
-       LEFT JOIN repos h ON r.full_name = h.full_name AND h.crawl_date = ? AND h.category = r.category
-       WHERE r.crawl_date = ? AND r.category = 'star_daily' LIMIT 5`
-    ).bind(yesterday, latestDate).all();
-    
-    // Test full queryRepos function
-    const result = await queryRepos(env.DB, { category: 'star_daily', crawlDate: latestDate, page: 1, perPage: 5, lang: '', search: '' });
-    
-    return json({
-      latestDate,
-      yesterday,
-      categories: rows.results,
-      dailySample: dailyRows.results,
-      queryResult: result
-    });
+    queryResult = await queryRepos(env.DB, { category: 'star_daily', crawlDate: latestDate, page: 1, perPage: 5, lang: '', search: '' });
   } catch (e) {
-    return json({ error: e.message }, 500);
+    queryError = e.message;
+    queryResult = null;
   }
+  
+  return json({
+    latestDate,
+    yesterday,
+    directQueryWorks: dailyRows.results.length > 0,
+    directQuerySample: dailyRows.results[0],
+    queryResult,
+    queryError
+  });
 }
 
 async function apiCrawl(request, env, ctx) {
