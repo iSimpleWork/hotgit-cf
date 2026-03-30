@@ -364,7 +364,7 @@ async function queryRepos(db, { category, crawlDate, page, perPage, lang, search
     else if (isWeekly) historyDate = getHistoryDate(crawlDate, 7);
     else if (isMonthly) historyDate = getHistoryDate(crawlDate, 30);
 
-    const conditions = ['r.crawl_date = ?', 'r.category = ?'];
+    const conditions = ['repos.crawl_date = ?', 'repos.category = ?'];
     const params     = [crawlDate, category];
 
     if (lang)   { conditions.push('language = ?');                     params.push(lang); }
@@ -375,9 +375,9 @@ async function queryRepos(db, { category, crawlDate, page, perPage, lang, search
     let rows;
     if (isIncrement && historyDate) {
       rows = await db.prepare(
-        `SELECT r.*, h.stars AS history_stars, h.forks AS history_forks 
-         FROM repos r 
-         LEFT JOIN repos h ON r.full_name = h.full_name AND h.crawl_date = ? AND h.category = r.category
+        `SELECT repos.*, h.stars AS history_stars, h.forks AS history_forks 
+         FROM repos 
+         LEFT JOIN repos h ON repos.full_name = h.full_name AND h.crawl_date = ? AND h.category = repos.category
          WHERE ${where}`
       ).bind(historyDate, ...params).all();
     } else {
