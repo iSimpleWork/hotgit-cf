@@ -59,6 +59,7 @@ export default {
     if (path === '/api/repos')  return apiRepos(request, env);
     if (path === '/api/stats')  return apiStats(env);
     if (path === '/api/dates')  return apiDates(env);
+    if (path === '/api/debug')  return apiDebug(env);
     if (path === '/api/crawl' && request.method === 'POST') {
       return apiCrawl(request, env, ctx);
     }
@@ -314,6 +315,7 @@ async function logCrawl(db, crawlDate, category, count, status, message) {
 async function getLatestDate(db) {
   try {
     const row = await db.prepare('SELECT MAX(crawl_date) AS d FROM repos').first();
+    console.log('[getLatestDate] result:', row?.d);
     return row?.d || null;
   } catch (e) {
     console.error('[getLatestDate] error:', e.message);
@@ -612,6 +614,21 @@ async function apiStats(env) {
 
 async function apiDates(env) {
   return json(await getCrawlDates(env.DB));
+}
+
+async function apiDebug(env) {
+  try {
+    const latestDate = await getLatestDate(env.DB);
+    const rows = await env.DB.prepare(
+      'SELECT category, COUNT(*) as cnt FROM repos WHERE crawl_date = ? GROUP BY category'
+    ).bind(latestDate).all();
+    return json({
+      latestDate,
+      categories: rows.results
+    });
+  } catch (e) {
+    return json({ error: e.message }, 500);
+  }
 }
 
 async function apiCrawl(request, env, ctx) {
