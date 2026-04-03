@@ -438,6 +438,10 @@ console.log(YELLOW('\nSuite 4: Worker Source Validation'));
   assertContains('worker: cron comment 20:00 UTC',   src, '20:00 UTC');
   assertContains('worker: todayCST function',        src, 'function todayCST');
   assertContains('worker: CST offset +8h',           src, '8 * 3600_000');
+  assertContains('worker: analytics snippet const',  src, 'const ANALYTICS_HEAD_SNIPPET');
+  assertContains('worker: Adsense account meta',     src, 'ca-pub-0790471852661955');
+  assertContains('worker: gtag id',                  src, 'G-RJDEV8XM5Y');
+  assertContains('worker: html helper supports status', src, 'function html(content, status = 200)');
 }
 
 // ── Suite 4b: 日期筛选 Bug 修复验证 ─────────────────────────────────

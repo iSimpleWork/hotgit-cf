@@ -639,9 +639,22 @@ function handleStatic(path) {
 // 页面渲染（服务端模板字符串）
 // ══════════════════════════════════════════════════════════════════════
 
-function html(content) {
-  return new Response(content, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+function html(content, status = 200) {
+  return new Response(content, {
+    status,
+    headers: { 'Content-Type': 'text/html; charset=utf-8' }
+  });
 }
+
+const ANALYTICS_HEAD_SNIPPET = `
+  <meta name="google-adsense-account" content="ca-pub-0790471852661955"/>
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-RJDEV8XM5Y"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', 'G-RJDEV8XM5Y');
+  </script>`;
 
 function baseLayout(title, bodyContent) {
   return `<!DOCTYPE html>
@@ -652,6 +665,7 @@ function baseLayout(title, bodyContent) {
   <title>${title}</title>
   <link rel="stylesheet" href="/static/css/style.css"/>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔥</text></svg>"/>
+${ANALYTICS_HEAD_SNIPPET}
 </head>
 <body>
   <nav class="navbar">
@@ -905,7 +919,8 @@ async function pageRepoDetail(env, owner, name) {
   if (!repo) {
     return html(`<!DOCTYPE html>
 <html lang="zh-CN">
-<head><meta charset="UTF-8"/><title>仓库未找到 — HotGit</title></head>
+<head><meta charset="UTF-8"/><title>仓库未找到 — HotGit</title>${ANALYTICS_HEAD_SNIPPET}
+</head>
 <body><h1>仓库未找到</h1><p>${escHtml(fullName)} 不在热门榜单中</p><a href="/">返回首页</a></body>
 </html>`, 404);
   }
@@ -1027,6 +1042,7 @@ async function pageRepoDetail(env, owner, name) {
   <meta property="og:type" content="article"/>
   <link rel="stylesheet" href="/static/css/style.css"/>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔥</text></svg>"/>
+${ANALYTICS_HEAD_SNIPPET}
 </head>
 <body>
   <nav class="navbar">
@@ -1058,7 +1074,8 @@ async function pageRepoDetailById(env, id) {
   if (!repo) {
     return html(`<!DOCTYPE html>
 <html lang="zh-CN">
-<head><meta charset="UTF-8"/><title>仓库未找到 — HotGit</title></head>
+<head><meta charset="UTF-8"/><title>仓库未找到 — HotGit</title>${ANALYTICS_HEAD_SNIPPET}
+</head>
 <body><h1>仓库未找到</h1><p>ID: ${id} 不在热门榜单中</p><a href="/">返回首页</a></body>
 </html>`, 404);
   }
