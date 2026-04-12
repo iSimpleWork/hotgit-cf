@@ -543,8 +543,11 @@ async function queryRepos(db, { category, crawlDate, page, perPage, lang, search
     const conditions = ['repos.crawl_date = ?', 'repos.category = ?'];
     const params     = [crawlDate, category];
 
-    if (lang)   { conditions.push('language = ?');                     params.push(lang); }
-    if (search) { conditions.push('(full_name LIKE ? OR description LIKE ?)'); params.push(`%${search}%`, `%${search}%`); }
+    if (lang)   { conditions.push('repos.language = ?'); params.push(lang); }
+    if (search) {
+      conditions.push('(repos.full_name LIKE ? OR repos.description LIKE ?)');
+      params.push(`%${search}%`, `%${search}%`);
+    }
 
     const where = conditions.join(' AND ');
 

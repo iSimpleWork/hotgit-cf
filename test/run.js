@@ -289,10 +289,10 @@ async function getStats(db) {
 async function queryRepos(db, { category, crawlDate, page, perPage, lang, search }) {
   if (!crawlDate) crawlDate = await getLatestDate(db);
   if (!crawlDate) return { total:0, page, per_page:perPage, data:[] };
-  const conditions = ['crawl_date = ?', 'category = ?'];
+  const conditions = ['repos.crawl_date = ?', 'repos.category = ?'];
   const params = [crawlDate, category];
-  if (lang)   { conditions.push('language = ?'); params.push(lang); }
-  if (search) { conditions.push('(full_name LIKE ? OR description LIKE ?)'); params.push(`%${search}%`, `%${search}%`); }
+  if (lang)   { conditions.push('repos.language = ?'); params.push(lang); }
+  if (search) { conditions.push('(repos.full_name LIKE ? OR repos.description LIKE ?)'); params.push(`%${search}%`, `%${search}%`); }
   const where = conditions.join(' AND ');
   const countRow = await db.prepare(`SELECT COUNT(*) AS n FROM repos WHERE ${where}`).bind(...params).first();
   const total = countRow?.n || 0;
@@ -547,6 +547,35 @@ console.log(YELLOW('\nSuite 2: Database Operations (Mock D1)'));
   assertEqual('multi-category: top_forks', stats.categories['top_forks'], 10);
 }
 
+{
+  const db = new MockD1();
+  const baseRepo = {
+    rank: 1,
+    full_name: 'openclaw/openclaw',
+    html_url: 'https://github.com/openclaw/openclaw',
+    description: 'Your own personal AI assistant',
+    language: 'TypeScript',
+    stars: 1000,
+    forks: 100,
+    open_issues: 1,
+    pushed_at: '2026-04-12 10:00:00',
+    topics: 'ai,assistant',
+    homepage: 'https://openclaw.ai',
+  };
+
+  await saveRepos(db, [{ ...baseRepo, category: 'star_weekly' }], '2026-04-12');
+  await saveRepos(db, [{ ...baseRepo, category: 'star_monthly' }], '2026-04-12');
+
+  const weeklySearch = await queryRepos(db, { category:'star_weekly', crawlDate:'2026-04-12', page:1, perPage:10, lang:'', search:'openclaw' });
+  assertEqual('weekly search: finds openclaw', weeklySearch.total, 1);
+
+  const monthlySearch = await queryRepos(db, { category:'star_monthly', crawlDate:'2026-04-12', page:1, perPage:10, lang:'', search:'openclaw' });
+  assertEqual('monthly search: finds openclaw', monthlySearch.total, 1);
+
+  const weeklyLang = await queryRepos(db, { category:'star_weekly', crawlDate:'2026-04-12', page:1, perPage:10, lang:'TypeScript', search:'' });
+  assertEqual('weekly language filter: finds TypeScript repo', weeklyLang.total, 1);
+}
+
 // ── Suite 3: 配置文件校验 ───────────────────────────────────────────
 console.log(YELLOW('\nSuite 3: Configuration Validation'));
 
@@ -596,6 +625,9 @@ console.log(YELLOW('\nSuite 4: Worker Source Validation'));
   assertContains('worker: potential daily scorer',   src, 'function scorePotentialDailyRepo');
   assertContains('worker: potential daily comparator', src, 'function comparePotentialDailyRepo');
   assertContains('worker: increment uses history table', src, 'LEFT JOIN repo_stars_history h');
+  assertContains('worker: search qualifies joined full_name', src, 'repos.full_name LIKE ?');
+  assertContains('worker: search qualifies joined description', src, 'repos.description LIKE ?');
+  assertContains('worker: language filter qualifies repos table', src, 'repos.language = ?');
 }
 
 // ── Suite 4b: 日期筛选 Bug 修复验证 ─────────────────────────────────
