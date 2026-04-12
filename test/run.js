@@ -719,7 +719,9 @@ console.log(YELLOW('\nSuite 5: CI/CD Configuration'));
 
   const deployScript = readFileSync(path.join(__dirname, '../deploy.sh'), 'utf8');
   assertContains('CI: deploy script sets migrations_dir', deployScript, 'migrations_dir =');
+  assertContains('CI: deploy script rewrites worker entry path', deployScript, 'main = \\"" worker_main "\\"');
   assertContains('CI: deploy script validates migrations dir', deployScript, '[ -d "${SCRIPT_DIR}/migrations" ]');
+  assertContains('CI: deploy script validates worker entry exists', deployScript, '[ -f "${SCRIPT_DIR}/src/worker.js" ]');
   assertContains('CI: deploy script injects migrations after database_id', deployScript, 'if ($0 ~ /database_id');
 }
 

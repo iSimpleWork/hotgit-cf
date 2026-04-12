@@ -22,9 +22,11 @@ make_temp_config() {
 
   awk \
     -v db_id="${HOTGIT_D1_DATABASE_ID}" \
+    -v worker_main="${SCRIPT_DIR}/src/worker.js" \
     -v migrations_dir="${SCRIPT_DIR}/migrations" '
       {
         gsub(/REPLACE_WITH_YOUR_D1_DATABASE_ID/, db_id)
+        gsub(/main = "src\/worker\.js"/, "main = \"" worker_main "\"")
         print
         if ($0 ~ /database_id[[:space:]]*=/) {
           print "migrations_dir = \"" migrations_dir "\""
@@ -41,7 +43,9 @@ make_temp_config() {
 validate_config() {
   grep -q "$HOTGIT_D1_DATABASE_ID" "$WRANGLER_TMP"
   grep -q "account_id = \"$CLOUDFLARE_ACCOUNT_ID\"" "$WRANGLER_TMP"
+  grep -q "main = \"${SCRIPT_DIR}/src/worker.js\"" "$WRANGLER_TMP"
   grep -q "migrations_dir = \"${SCRIPT_DIR}/migrations\"" "$WRANGLER_TMP"
+  [ -f "${SCRIPT_DIR}/src/worker.js" ]
   [ -d "${SCRIPT_DIR}/migrations" ]
 }
 
