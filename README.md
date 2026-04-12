@@ -2,7 +2,7 @@
 
 > 每天自动追踪 GitHub 最热项目，按 Star 总数、Fork 数、日/周/月增量分类展示。
 
-**线上地址**：https://hotgit-cf.linkai.workers.dev
+**线上地址**：https://www.hotgit.org
 
 ---
 
