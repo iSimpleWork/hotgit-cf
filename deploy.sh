@@ -8,6 +8,7 @@
 set -euo pipefail
 
 MODE="${1:-deploy}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 require_env() {
   : "${CLOUDFLARE_API_TOKEN:?请设置 CLOUDFLARE_API_TOKEN 环境变量}"
@@ -26,12 +27,15 @@ make_temp_config() {
   {
     echo ""
     echo "account_id = \"${CLOUDFLARE_ACCOUNT_ID}\""
+    echo "migrations_dir = \"${SCRIPT_DIR}/migrations\""
   } >> "$WRANGLER_TMP"
 }
 
 validate_config() {
   grep -q "$HOTGIT_D1_DATABASE_ID" "$WRANGLER_TMP"
   grep -q "account_id = \"$CLOUDFLARE_ACCOUNT_ID\"" "$WRANGLER_TMP"
+  grep -q "migrations_dir = \"${SCRIPT_DIR}/migrations\"" "$WRANGLER_TMP"
+  [ -d "${SCRIPT_DIR}/migrations" ]
 }
 
 run_migrations() {
