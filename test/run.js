@@ -73,6 +73,61 @@ function parseTrendingRepoNames(html) {
   return names;
 }
 
+function daysSince(dateString, now = Date.now()) {
+  if (!dateString) return Infinity;
+  const ts = Date.parse(dateString);
+  if (Number.isNaN(ts)) return Infinity;
+  return Math.max(0, Math.floor((now - ts) / 86400_000));
+}
+
+function scorePotentialDailyRepo(repo, { historyDay, historyWeek, isTrending, now = Date.now() }) {
+  const stars = repo.stargazers_count || 0;
+  const dailyGain = historyDay ? Math.max(0, stars - (historyDay.stars || 0)) : 0;
+  const weeklyGain = historyWeek ? Math.max(0, stars - (historyWeek.stars || 0)) : 0;
+  const ageDays = daysSince(repo.created_at, now);
+  const pushedDays = daysSince(repo.pushed_at || repo.updated_at, now);
+
+  const trendingBoost = isTrending ? 120 : 0;
+  const freshnessBoost = ageDays <= 7 ? 80 : ageDays <= 30 ? 45 : ageDays <= 90 ? 20 : 0;
+  const activityBoost = pushedDays <= 1 ? 30 : pushedDays <= 3 ? 15 : 0;
+  const normalizedDaily = dailyGain > 0 ? dailyGain / Math.max(Math.sqrt(stars), 8) : 0;
+  const normalizedWeekly = weeklyGain > 0 ? weeklyGain / Math.max(Math.sqrt(stars), 8) : 0;
+  const coldStartBoost = !historyDay && ageDays <= 30 ? Math.min(stars, 300) * 0.2 : 0;
+
+  const score =
+    trendingBoost +
+    freshnessBoost +
+    activityBoost +
+    dailyGain * 3 +
+    weeklyGain * 0.8 +
+    normalizedDaily * 120 +
+    normalizedWeekly * 40 +
+    coldStartBoost;
+
+  return {
+    score,
+    dailyGain,
+    weeklyGain,
+  };
+}
+
+function comparePotentialDailyRepo(a, b) {
+  const aTrending = a.sources.has('trending') ? 1 : 0;
+  const bTrending = b.sources.has('trending') ? 1 : 0;
+  if (bTrending !== aTrending) return bTrending - aTrending;
+
+  if (b.dailyGain !== a.dailyGain) return b.dailyGain - a.dailyGain;
+
+  const aStars = a.repo.stargazers_count || 0;
+  const bStars = b.repo.stargazers_count || 0;
+  if (bStars !== aStars) return bStars - aStars;
+
+  if (b.weeklyGain !== a.weeklyGain) return b.weeklyGain - a.weeklyGain;
+  if (b.score !== a.score) return b.score - a.score;
+
+  return a.repo.full_name.localeCompare(b.repo.full_name);
+}
+
 function escHtml(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
@@ -337,6 +392,71 @@ console.log(YELLOW('Suite 1: Utility Functions'));
   assertEqual('parseTrendingRepoNames: ignores issue/pull links', names.length, 2);
 }
 
+{
+  const now = Date.parse('2026-04-12T00:00:00Z');
+  const repo = {
+    stargazers_count: 300,
+    created_at: '2026-04-05T00:00:00Z',
+    pushed_at: '2026-04-11T12:00:00Z',
+  };
+  const scored = scorePotentialDailyRepo(repo, {
+    historyDay: { stars: 220 },
+    historyWeek: { stars: 80 },
+    isTrending: true,
+    now,
+  });
+  assertEqual('scorePotentialDailyRepo: daily gain', scored.dailyGain, 80);
+  assertEqual('scorePotentialDailyRepo: weekly gain', scored.weeklyGain, 220);
+  assert('scorePotentialDailyRepo: trending boosts score', scored.score > 500);
+}
+
+{
+  const now = Date.parse('2026-04-12T00:00:00Z');
+  const repo = {
+    stargazers_count: 120,
+    created_at: '2026-04-10T00:00:00Z',
+    pushed_at: '2026-04-11T08:00:00Z',
+  };
+  const scored = scorePotentialDailyRepo(repo, {
+    historyDay: null,
+    historyWeek: null,
+    isTrending: false,
+    now,
+  });
+  assertEqual('scorePotentialDailyRepo: no daily history means no daily gain', scored.dailyGain, 0);
+  assert('scorePotentialDailyRepo: cold start still gets positive score', scored.score > 0);
+}
+
+{
+  const items = [
+    {
+      repo: { full_name: 'b/non-trending-high', stargazers_count: 9999 },
+      sources: new Set(),
+      dailyGain: 500,
+      weeklyGain: 900,
+      score: 3000,
+    },
+    {
+      repo: { full_name: 'a/trending-lower', stargazers_count: 5000 },
+      sources: new Set(['trending']),
+      dailyGain: 200,
+      weeklyGain: 300,
+      score: 1200,
+    },
+    {
+      repo: { full_name: 'c/trending-higher-stars', stargazers_count: 6000 },
+      sources: new Set(['trending']),
+      dailyGain: 200,
+      weeklyGain: 250,
+      score: 1100,
+    },
+  ];
+  items.sort(comparePotentialDailyRepo);
+  assertEqual('comparePotentialDailyRepo: trending group comes first', items[0].repo.full_name, 'c/trending-higher-stars');
+  assertEqual('comparePotentialDailyRepo: trending tie breaks by stars', items[1].repo.full_name, 'a/trending-lower');
+  assertEqual('comparePotentialDailyRepo: non-trending comes after trending', items[2].repo.full_name, 'b/non-trending-high');
+}
+
 assertEqual('escHtml: & → &amp;',      escHtml('a & b'),   'a &amp; b');
 assertEqual('escHtml: < → &lt;',       escHtml('<script>'), '&lt;script&gt;');
 assertEqual('escHtml: " → &quot;',     escHtml('"x"'),      '&quot;x&quot;');
@@ -472,7 +592,9 @@ console.log(YELLOW('\nSuite 4: Worker Source Validation'));
   assertContains('worker: gtag id',                  src, 'G-RJDEV8XM5Y');
   assertContains('worker: html helper supports status', src, 'function html(content, status = 200)');
   assertContains('worker: trending parser',          src, 'function parseTrendingRepoNames');
-  assertContains('worker: daily fetch uses trending', src, "fn: () => fetchTrendingRepos");
+  assertContains('worker: daily fetch uses potential pool', src, "fn: () => fetchPotentialDailyRepos");
+  assertContains('worker: potential daily scorer',   src, 'function scorePotentialDailyRepo');
+  assertContains('worker: potential daily comparator', src, 'function comparePotentialDailyRepo');
   assertContains('worker: increment uses history table', src, 'LEFT JOIN repo_stars_history h');
 }
 

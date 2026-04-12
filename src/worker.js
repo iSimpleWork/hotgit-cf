@@ -203,6 +203,112 @@ async function fetchTrendingRepos(githubToken) {
   return repos;
 }
 
+function daysSince(dateString, now = Date.now()) {
+  if (!dateString) return Infinity;
+  const ts = Date.parse(dateString);
+  if (Number.isNaN(ts)) return Infinity;
+  return Math.max(0, Math.floor((now - ts) / 86400_000));
+}
+
+function scorePotentialDailyRepo(repo, { historyDay, historyWeek, isTrending, now = Date.now() }) {
+  const stars = repo.stargazers_count || 0;
+  const dailyGain = historyDay ? Math.max(0, stars - (historyDay.stars || 0)) : 0;
+  const weeklyGain = historyWeek ? Math.max(0, stars - (historyWeek.stars || 0)) : 0;
+  const ageDays = daysSince(repo.created_at, now);
+  const pushedDays = daysSince(repo.pushed_at || repo.updated_at, now);
+
+  const trendingBoost = isTrending ? 120 : 0;
+  const freshnessBoost = ageDays <= 7 ? 80 : ageDays <= 30 ? 45 : ageDays <= 90 ? 20 : 0;
+  const activityBoost = pushedDays <= 1 ? 30 : pushedDays <= 3 ? 15 : 0;
+  const normalizedDaily = dailyGain > 0 ? dailyGain / Math.max(Math.sqrt(stars), 8) : 0;
+  const normalizedWeekly = weeklyGain > 0 ? weeklyGain / Math.max(Math.sqrt(stars), 8) : 0;
+  const coldStartBoost = !historyDay && ageDays <= 30 ? Math.min(stars, 300) * 0.2 : 0;
+
+  const score =
+    trendingBoost +
+    freshnessBoost +
+    activityBoost +
+    dailyGain * 3 +
+    weeklyGain * 0.8 +
+    normalizedDaily * 120 +
+    normalizedWeekly * 40 +
+    coldStartBoost;
+
+  return {
+    score,
+    dailyGain,
+    weeklyGain,
+  };
+}
+
+function comparePotentialDailyRepo(a, b) {
+  const aTrending = a.sources.has('trending') ? 1 : 0;
+  const bTrending = b.sources.has('trending') ? 1 : 0;
+  if (bTrending !== aTrending) return bTrending - aTrending;
+
+  if (b.dailyGain !== a.dailyGain) return b.dailyGain - a.dailyGain;
+
+  const aStars = a.repo.stargazers_count || 0;
+  const bStars = b.repo.stargazers_count || 0;
+  if (bStars !== aStars) return bStars - aStars;
+
+  if (b.weeklyGain !== a.weeklyGain) return b.weeklyGain - a.weeklyGain;
+  if (b.score !== a.score) return b.score - a.score;
+
+  return a.repo.full_name.localeCompare(b.repo.full_name);
+}
+
+async function fetchPotentialDailyRepos(db, githubToken) {
+  const today = todayCST();
+  const dayDate = getHistoryDate(today, 1);
+  const weekDate = getHistoryDate(today, 7);
+  const sources = [
+    { name: 'trending', limit: 25, fn: () => fetchTrendingRepos(githubToken) },
+    { name: 'fresh_new', limit: 100, fn: () => githubSearch(`archived:false created:>=${sinceDate(14)} stars:>=10`, 'stars', githubToken) },
+    { name: 'fresh_rising', limit: 100, fn: () => githubSearch(`archived:false created:>=${sinceDate(90)} stars:20..5000`, 'stars', githubToken) },
+    { name: 'active_rising', limit: 100, fn: () => githubSearch(`archived:false pushed:>=${sinceDate(3)} stars:20..10000`, 'updated', githubToken) },
+  ];
+
+  const candidates = new Map();
+
+  for (const source of sources) {
+    try {
+      const items = await source.fn();
+      for (const repo of items.slice(0, source.limit)) {
+        if (!repo?.full_name) continue;
+        const existing = candidates.get(repo.full_name);
+        if (existing) {
+          existing.sources.add(source.name);
+          continue;
+        }
+        candidates.set(repo.full_name, { repo, sources: new Set([source.name]) });
+      }
+    } catch (e) {
+      console.error('[star_daily] source error:', source.name, e.message);
+    }
+    await new Promise(r => setTimeout(r, 300));
+  }
+
+  const scored = [];
+  for (const candidate of candidates.values()) {
+    const historyDay = await getHistoryStars(db, candidate.repo.full_name, dayDate);
+    const historyWeek = await getHistoryStars(db, candidate.repo.full_name, weekDate);
+    const scoring = scorePotentialDailyRepo(candidate.repo, {
+      historyDay,
+      historyWeek,
+      isTrending: candidate.sources.has('trending'),
+    });
+    scored.push({
+      ...candidate,
+      ...scoring,
+    });
+  }
+
+  scored.sort(comparePotentialDailyRepo);
+
+  return scored.slice(0, 100).map((item, index) => fmtRepo(item.repo, 'star_daily', index + 1));
+}
+
 /** 把 GitHub repo 对象格式化成统一结构 */
 function fmtRepo(repo, category, rank) {
   let pushedAt = repo.pushed_at || repo.updated_at || '';
@@ -242,11 +348,11 @@ function sinceDate(days) {
 }
 
 /** 爬取所有榜单 */
-async function fetchAll(githubToken) {
+async function fetchAll(db, githubToken) {
   const tasks = [
     { name: 'top_stars',    fn: () => githubSearch('stars:>1000',           'stars', githubToken) },
     { name: 'top_forks',    fn: () => githubSearch('forks:>500',            'forks', githubToken) },
-    { name: 'star_daily',   fn: () => fetchTrendingRepos(githubToken) },
+    { name: 'star_daily',   fn: () => fetchPotentialDailyRepos(db, githubToken) },
     { name: 'star_weekly',  fn: () => githubSearch('stars:>100',             'stars', githubToken) },
     { name: 'star_monthly', fn: () => githubSearch('stars:>100',              'stars', githubToken) },
   ];
@@ -255,7 +361,9 @@ async function fetchAll(githubToken) {
   // 顺序执行，避免 GitHub 限流
   for (const { name, fn } of tasks) {
     const items = await fn();
-    result[name] = items.slice(0, 100).map((r, i) => fmtRepo(r, name, i + 1));
+    result[name] = name === 'star_daily'
+      ? items
+      : items.slice(0, 100).map((r, i) => fmtRepo(r, name, i + 1));
     // 间隔 1 秒
     await new Promise(r => setTimeout(r, 1000));
   }
@@ -290,7 +398,7 @@ async function runCrawl(env) {
 
   let allRepos;
   try {
-    allRepos = await fetchAll(env.GITHUB_TOKEN || '');
+    allRepos = await fetchAll(env.DB, env.GITHUB_TOKEN || '');
   } catch (e) {
     console.error('[crawl] fetchAll error:', e.message);
     await logCrawl(env.DB, today, 'ALL', 0, 'error', e.message);
@@ -920,7 +1028,7 @@ async function pageForceUpdate(env) {
   const tasks = [
     { name: 'top_stars',    label: CATEGORY_LABELS.top_stars,    fn: () => githubSearch('stars:>1000',           'stars', env.GITHUB_TOKEN || '') },
     { name: 'top_forks',    label: CATEGORY_LABELS.top_forks,    fn: () => githubSearch('forks:>500',            'forks', env.GITHUB_TOKEN || '') },
-    { name: 'star_daily',   label: CATEGORY_LABELS.star_daily,   fn: () => fetchTrendingRepos(env.GITHUB_TOKEN || '') },
+    { name: 'star_daily',   label: CATEGORY_LABELS.star_daily,   fn: () => fetchPotentialDailyRepos(env.DB, env.GITHUB_TOKEN || '') },
     { name: 'star_weekly',  label: CATEGORY_LABELS.star_weekly,  fn: () => githubSearch('stars:>100',            'stars', env.GITHUB_TOKEN || '') },
     { name: 'star_monthly', label: CATEGORY_LABELS.star_monthly, fn: () => githubSearch('stars:>100',             'stars', env.GITHUB_TOKEN || '') },
   ];
@@ -929,7 +1037,9 @@ async function pageForceUpdate(env) {
     const t0 = Date.now();
     try {
       const items = await task.fn();
-      const repos = items.slice(0, 100).map((r, i) => fmtRepo(r, task.name, i + 1));
+      const repos = task.name === 'star_daily'
+        ? items
+        : items.slice(0, 100).map((r, i) => fmtRepo(r, task.name, i + 1));
       await translateAndSaveRepos(env.DB, repos);
       await saveRepos(env.DB, repos, today);
       await logCrawl(env.DB, today, task.name, repos.length, 'ok', '');
