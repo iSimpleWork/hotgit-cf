@@ -116,6 +116,12 @@ function comparePotentialDailyRepo(a, b) {
   const bTrending = b.sources.has('trending') ? 1 : 0;
   if (bTrending !== aTrending) return bTrending - aTrending;
 
+  if (aTrending && (!a.hasDailyHistory || !b.hasDailyHistory)) {
+    const aTrendingRank = a.trendingRank ?? Infinity;
+    const bTrendingRank = b.trendingRank ?? Infinity;
+    if (aTrendingRank !== bTrendingRank) return aTrendingRank - bTrendingRank;
+  }
+
   if (b.dailyGain !== a.dailyGain) return b.dailyGain - a.dailyGain;
 
   const aStars = a.repo.stargazers_count || 0;
@@ -435,6 +441,8 @@ console.log(YELLOW('Suite 1: Utility Functions'));
       dailyGain: 500,
       weeklyGain: 900,
       score: 3000,
+      hasDailyHistory: true,
+      trendingRank: null,
     },
     {
       repo: { full_name: 'a/trending-lower', stargazers_count: 5000 },
@@ -442,6 +450,8 @@ console.log(YELLOW('Suite 1: Utility Functions'));
       dailyGain: 200,
       weeklyGain: 300,
       score: 1200,
+      hasDailyHistory: true,
+      trendingRank: 2,
     },
     {
       repo: { full_name: 'c/trending-higher-stars', stargazers_count: 6000 },
@@ -449,12 +459,39 @@ console.log(YELLOW('Suite 1: Utility Functions'));
       dailyGain: 200,
       weeklyGain: 250,
       score: 1100,
+      hasDailyHistory: true,
+      trendingRank: 1,
     },
   ];
   items.sort(comparePotentialDailyRepo);
   assertEqual('comparePotentialDailyRepo: trending group comes first', items[0].repo.full_name, 'c/trending-higher-stars');
   assertEqual('comparePotentialDailyRepo: trending tie breaks by stars', items[1].repo.full_name, 'a/trending-lower');
   assertEqual('comparePotentialDailyRepo: non-trending comes after trending', items[2].repo.full_name, 'b/non-trending-high');
+}
+
+{
+  const items = [
+    {
+      repo: { full_name: 'b/trending-second', stargazers_count: 99999 },
+      sources: new Set(['trending']),
+      dailyGain: 0,
+      weeklyGain: 0,
+      score: 500,
+      hasDailyHistory: false,
+      trendingRank: 2,
+    },
+    {
+      repo: { full_name: 'a/trending-first', stargazers_count: 1000 },
+      sources: new Set(['trending']),
+      dailyGain: 0,
+      weeklyGain: 0,
+      score: 300,
+      hasDailyHistory: false,
+      trendingRank: 1,
+    },
+  ];
+  items.sort(comparePotentialDailyRepo);
+  assertEqual('comparePotentialDailyRepo: trending fallback keeps original order when daily history is missing', items[0].repo.full_name, 'a/trending-first');
 }
 
 assertEqual('escHtml: & → &amp;',      escHtml('a & b'),   'a &amp; b');
@@ -625,6 +662,7 @@ console.log(YELLOW('\nSuite 4: Worker Source Validation'));
   assertContains('worker: potential daily scorer',   src, 'function scorePotentialDailyRepo');
   assertContains('worker: potential daily comparator', src, 'function comparePotentialDailyRepo');
   assertContains('worker: increment uses history table', src, 'LEFT JOIN repo_stars_history h');
+  assertContains('worker: trending rank metadata', src, '__trendingRank');
   assertContains('worker: search qualifies joined full_name', src, 'repos.full_name LIKE ?');
   assertContains('worker: search qualifies joined description', src, 'repos.description LIKE ?');
   assertContains('worker: language filter qualifies repos table', src, 'repos.language = ?');

@@ -192,9 +192,11 @@ async function fetchTrendingRepos(githubToken) {
   }
 
   const repos = [];
-  for (const fullName of repoNames) {
+  for (const [index, fullName] of repoNames.entries()) {
     try {
-      repos.push(await githubRepo(fullName, githubToken));
+      const repo = await githubRepo(fullName, githubToken);
+      repo.__trendingRank = index + 1;
+      repos.push(repo);
     } catch (e) {
       console.error('[trending] repo detail error:', fullName, e.message);
     }
@@ -245,6 +247,12 @@ function comparePotentialDailyRepo(a, b) {
   const aTrending = a.sources.has('trending') ? 1 : 0;
   const bTrending = b.sources.has('trending') ? 1 : 0;
   if (bTrending !== aTrending) return bTrending - aTrending;
+
+  if (aTrending && (!a.hasDailyHistory || !b.hasDailyHistory)) {
+    const aTrendingRank = a.trendingRank ?? Infinity;
+    const bTrendingRank = b.trendingRank ?? Infinity;
+    if (aTrendingRank !== bTrendingRank) return aTrendingRank - bTrendingRank;
+  }
 
   if (b.dailyGain !== a.dailyGain) return b.dailyGain - a.dailyGain;
 
@@ -301,6 +309,8 @@ async function fetchPotentialDailyRepos(db, githubToken) {
     scored.push({
       ...candidate,
       ...scoring,
+      hasDailyHistory: historyDay !== null,
+      trendingRank: candidate.repo.__trendingRank ?? null,
     });
   }
 
