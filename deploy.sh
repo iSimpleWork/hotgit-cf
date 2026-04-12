@@ -20,14 +20,21 @@ make_temp_config() {
   WRANGLER_TMP=$(mktemp /tmp/wrangler_deploy_XXXXXX.toml)
   trap 'rm -f "$WRANGLER_TMP"' EXIT
 
-  sed \
-    -e "s|REPLACE_WITH_YOUR_D1_DATABASE_ID|${HOTGIT_D1_DATABASE_ID}|g" \
-    wrangler.toml > "$WRANGLER_TMP"
+  awk \
+    -v db_id="${HOTGIT_D1_DATABASE_ID}" \
+    -v migrations_dir="${SCRIPT_DIR}/migrations" '
+      {
+        gsub(/REPLACE_WITH_YOUR_D1_DATABASE_ID/, db_id)
+        print
+        if ($0 ~ /database_id[[:space:]]*=/) {
+          print "migrations_dir = \"" migrations_dir "\""
+        }
+      }
+    ' wrangler.toml > "$WRANGLER_TMP"
 
   {
     echo ""
     echo "account_id = \"${CLOUDFLARE_ACCOUNT_ID}\""
-    echo "migrations_dir = \"${SCRIPT_DIR}/migrations\""
   } >> "$WRANGLER_TMP"
 }
 
