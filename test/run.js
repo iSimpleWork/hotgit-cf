@@ -748,6 +748,7 @@ console.log(YELLOW('\nSuite 5: CI/CD Configuration'));
   assertContains('CI: uses CF API token secret',     yml, 'CLOUDFLARE_API_TOKEN');
   assertContains('CI: uses CF account ID secret',    yml, 'CLOUDFLARE_ACCOUNT_ID');
   assertContains('CI: patches D1 database id',       yml, 'CLOUDFLARE_D1_DATABASE_ID');
+  assertContains('CI: passes GitHub PAT secret to deploy script', yml, 'HOTGIT_GH_PAT');
 
   const deployScript = readFileSync(path.join(__dirname, '../deploy.sh'), 'utf8');
   assertContains('CI: deploy script sets migrations_dir', deployScript, 'migrations_dir =');
