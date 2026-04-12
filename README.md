@@ -93,13 +93,21 @@ npx wrangler d1 create hotgit-db
 npx wrangler d1 execute hotgit-db --file=migrations/0001_init.sql --remote
 ```
 
-### 第四步：部署
+### 第四步：本地验证部署脚本
+
+先验证脚本能正确提取配置并生成临时 `wrangler.toml`：
+
+```bash
+bash deploy.sh --validate
+```
+
+### 第五步：部署
 
 ```bash
 bash deploy.sh
 ```
 
-`deploy.sh` 会从环境变量读取配置，动态生成临时部署文件，**不会修改源码中的 wrangler.toml**。
+`deploy.sh` 会先执行远端 D1 迁移，再部署 Worker。它从环境变量读取配置，动态生成临时部署文件，**不会修改源码中的 wrangler.toml**。
 
 部署成功后设置 GitHub Token Secret（提升爬取限额）：
 
@@ -120,6 +128,7 @@ echo "$GITHUB_TOKEN" | npx wrangler secret put GITHUB_TOKEN
 | `CLOUDFLARE_D1_DATABASE_ID` | D1 数据库 ID |
 
 配置完成后，每次推送到 `main` 分支即自动部署。
+GitHub Actions 会先运行 `bash deploy.sh --validate`，再运行同一份 `bash deploy.sh` 做迁移和部署，确保 CI 与本地使用同一套脚本逻辑。
 
 ---
 

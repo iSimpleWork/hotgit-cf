@@ -57,6 +57,22 @@ function fmtRepo(repo, category, rank) {
   };
 }
 
+function parseTrendingRepoNames(html) {
+  const names = [];
+  const seen = new Set();
+  const matches = html.matchAll(/<h2[^>]*>\s*<a[^>]*href="\/([\w.-]+\/[\w.-]+)"/g);
+
+  for (const match of matches) {
+    const fullName = match[1];
+    if (!fullName || seen.has(fullName)) continue;
+    if (fullName.includes('/pulls') || fullName.includes('/issues')) continue;
+    seen.add(fullName);
+    names.push(fullName);
+  }
+
+  return names;
+}
+
 function escHtml(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
@@ -308,6 +324,19 @@ console.log(YELLOW('Suite 1: Utility Functions'));
   assertEqual('fmtRepo minimal: topics=""',     r.topics,      '');
 }
 
+{
+  const html = `
+    <article><h2><a href="/foo/bar">foo/bar</a></h2></article>
+    <article><h2><a href="/baz/qux">baz/qux</a></h2></article>
+    <a href="/foo/bar/issues">issues</a>
+    <a href="/foo/bar/pulls">pulls</a>
+  `;
+  const names = parseTrendingRepoNames(html);
+  assertEqual('parseTrendingRepoNames: first repo', names[0], 'foo/bar');
+  assertEqual('parseTrendingRepoNames: second repo', names[1], 'baz/qux');
+  assertEqual('parseTrendingRepoNames: ignores issue/pull links', names.length, 2);
+}
+
 assertEqual('escHtml: & → &amp;',      escHtml('a & b'),   'a &amp; b');
 assertEqual('escHtml: < → &lt;',       escHtml('<script>'), '&lt;script&gt;');
 assertEqual('escHtml: " → &quot;',     escHtml('"x"'),      '&quot;x&quot;');
@@ -442,6 +471,9 @@ console.log(YELLOW('\nSuite 4: Worker Source Validation'));
   assertContains('worker: Adsense account meta',     src, 'ca-pub-0790471852661955');
   assertContains('worker: gtag id',                  src, 'G-RJDEV8XM5Y');
   assertContains('worker: html helper supports status', src, 'function html(content, status = 200)');
+  assertContains('worker: trending parser',          src, 'function parseTrendingRepoNames');
+  assertContains('worker: daily fetch uses trending', src, "fn: () => fetchTrendingRepos");
+  assertContains('worker: increment uses history table', src, 'LEFT JOIN repo_stars_history h');
 }
 
 // ── Suite 4b: 日期筛选 Bug 修复验证 ─────────────────────────────────
@@ -556,7 +588,9 @@ console.log(YELLOW('\nSuite 5: CI/CD Configuration'));
   const yml = readFileSync(path.join(__dirname, '../.github/workflows/deploy.yml'), 'utf8');
   assertContains('CI: triggers on main push',        yml, "branches: [main]");
   assertContains('CI: checkout step',                yml, 'actions/checkout');
-  assertContains('CI: deploy step (wrangler-action)', yml, 'wrangler-action');
+  assertContains('CI: setup node step',              yml, 'actions/setup-node');
+  assertContains('CI: validate shared deploy script', yml, 'bash deploy.sh --validate');
+  assertContains('CI: run shared deploy script',     yml, 'bash deploy.sh');
   assertContains('CI: uses CF API token secret',     yml, 'CLOUDFLARE_API_TOKEN');
   assertContains('CI: uses CF account ID secret',    yml, 'CLOUDFLARE_ACCOUNT_ID');
   assertContains('CI: patches D1 database id',       yml, 'CLOUDFLARE_D1_DATABASE_ID');

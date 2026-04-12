@@ -135,6 +135,74 @@ async function githubSearch(query, sort, githubToken, perPage = 100) {
   return data.items || [];
 }
 
+async function githubRepo(fullName, githubToken) {
+  const headers = {
+    Accept: 'application/vnd.github.v3+json',
+    'User-Agent': USER_AGENT,
+  };
+  if (githubToken) headers['Authorization'] = `token ${githubToken}`;
+
+  const res = await fetch(`${GITHUB_API}/repos/${fullName}`, {
+    headers,
+    cf: { cacheTtl: 300, cacheEverything: false },
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`GitHub repo API ${res.status}: ${text.slice(0, 200)}`);
+  }
+
+  return res.json();
+}
+
+function parseTrendingRepoNames(html) {
+  const names = [];
+  const seen = new Set();
+  const matches = html.matchAll(/<h2[^>]*>\s*<a[^>]*href="\/([\w.-]+\/[\w.-]+)"/g);
+
+  for (const match of matches) {
+    const fullName = match[1];
+    if (!fullName || seen.has(fullName)) continue;
+    if (fullName.includes('/pulls') || fullName.includes('/issues')) continue;
+    seen.add(fullName);
+    names.push(fullName);
+  }
+
+  return names;
+}
+
+async function fetchTrendingRepos(githubToken) {
+  const res = await fetch('https://github.com/trending?since=daily', {
+    headers: {
+      Accept: 'text/html,application/xhtml+xml',
+      'User-Agent': USER_AGENT,
+    },
+    cf: { cacheTtl: 300, cacheEverything: false },
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`GitHub Trending ${res.status}: ${text.slice(0, 200)}`);
+  }
+
+  const html = await res.text();
+  const repoNames = parseTrendingRepoNames(html).slice(0, 25);
+  if (!repoNames.length) {
+    throw new Error('GitHub Trending parse error: no repositories found');
+  }
+
+  const repos = [];
+  for (const fullName of repoNames) {
+    try {
+      repos.push(await githubRepo(fullName, githubToken));
+    } catch (e) {
+      console.error('[trending] repo detail error:', fullName, e.message);
+    }
+    await new Promise(r => setTimeout(r, 150));
+  }
+  return repos;
+}
+
 /** 把 GitHub repo 对象格式化成统一结构 */
 function fmtRepo(repo, category, rank) {
   let pushedAt = repo.pushed_at || repo.updated_at || '';
@@ -178,7 +246,7 @@ async function fetchAll(githubToken) {
   const tasks = [
     { name: 'top_stars',    fn: () => githubSearch('stars:>1000',           'stars', githubToken) },
     { name: 'top_forks',    fn: () => githubSearch('forks:>500',            'forks', githubToken) },
-    { name: 'star_daily',   fn: () => githubSearch('stars:>100',            'stars', githubToken) },
+    { name: 'star_daily',   fn: () => fetchTrendingRepos(githubToken) },
     { name: 'star_weekly',  fn: () => githubSearch('stars:>100',             'stars', githubToken) },
     { name: 'star_monthly', fn: () => githubSearch('stars:>100',              'stars', githubToken) },
   ];
@@ -377,7 +445,7 @@ async function queryRepos(db, { category, crawlDate, page, perPage, lang, search
       rows = await db.prepare(
         `SELECT repos.*, h.stars AS history_stars, h.forks AS history_forks 
          FROM repos 
-         LEFT JOIN repos h ON repos.full_name = h.full_name AND h.crawl_date = ? AND h.category = repos.category
+         LEFT JOIN repo_stars_history h ON repos.full_name = h.full_name AND h.crawl_date = ?
          WHERE ${where}`
       ).bind(historyDate, ...params).all();
     } else {
@@ -852,7 +920,7 @@ async function pageForceUpdate(env) {
   const tasks = [
     { name: 'top_stars',    label: CATEGORY_LABELS.top_stars,    fn: () => githubSearch('stars:>1000',           'stars', env.GITHUB_TOKEN || '') },
     { name: 'top_forks',    label: CATEGORY_LABELS.top_forks,    fn: () => githubSearch('forks:>500',            'forks', env.GITHUB_TOKEN || '') },
-    { name: 'star_daily',   label: CATEGORY_LABELS.star_daily,   fn: () => githubSearch('stars:>100',             'stars', env.GITHUB_TOKEN || '') },
+    { name: 'star_daily',   label: CATEGORY_LABELS.star_daily,   fn: () => fetchTrendingRepos(env.GITHUB_TOKEN || '') },
     { name: 'star_weekly',  label: CATEGORY_LABELS.star_weekly,  fn: () => githubSearch('stars:>100',            'stars', env.GITHUB_TOKEN || '') },
     { name: 'star_monthly', label: CATEGORY_LABELS.star_monthly, fn: () => githubSearch('stars:>100',             'stars', env.GITHUB_TOKEN || '') },
   ];
