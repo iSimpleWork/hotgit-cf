@@ -266,7 +266,7 @@ function comparePotentialDailyRepo(a, b) {
   return a.repo.full_name.localeCompare(b.repo.full_name);
 }
 
-async function fetchPotentialDailyRepos(db, githubToken) {
+async function fetchPotentialDailyRepos(db, githubToken, limit = 100) {
   const today = todayCST();
   const dayDate = getHistoryDate(today, 1);
   const weekDate = getHistoryDate(today, 7);
@@ -316,7 +316,7 @@ async function fetchPotentialDailyRepos(db, githubToken) {
 
   scored.sort(comparePotentialDailyRepo);
 
-  return scored.slice(0, 100).map((item, index) => fmtRepo(item.repo, 'star_daily', index + 1));
+  return scored.slice(0, limit).map((item, index) => fmtRepo(item.repo, 'star_daily', index + 1));
 }
 
 /** 把 GitHub repo 对象格式化成统一结构 */
@@ -358,11 +358,11 @@ function sinceDate(days) {
 }
 
 /** 爬取所有榜单 */
-async function fetchAll(db, githubToken) {
+async function fetchAll(db, githubToken, prefetchedDailyRepos = null) {
   const tasks = [
     { name: 'top_stars',    fn: () => githubSearch('stars:>1000',           'stars', githubToken) },
     { name: 'top_forks',    fn: () => githubSearch('forks:>500',            'forks', githubToken) },
-    { name: 'star_daily',   fn: () => fetchPotentialDailyRepos(db, githubToken) },
+    { name: 'star_daily',   fn: () => prefetchedDailyRepos || fetchPotentialDailyRepos(db, githubToken) },
     { name: 'star_weekly',  fn: () => githubSearch('stars:>100',             'stars', githubToken) },
     { name: 'star_monthly', fn: () => githubSearch('stars:>100',              'stars', githubToken) },
   ];
@@ -405,10 +405,13 @@ async function getHistoryStars(db, fullName, date) {
 async function runCrawl(env) {
   const today = todayCST();
   console.log(`[crawl] start date=${today}`);
+  const githubToken = env.GITHUB_TOKEN || '';
 
+  let dailyHistoryPool = [];
   let allRepos;
   try {
-    allRepos = await fetchAll(env.DB, env.GITHUB_TOKEN || '');
+    dailyHistoryPool = await fetchPotentialDailyRepos(env.DB, githubToken, 300);
+    allRepos = await fetchAll(env.DB, githubToken, dailyHistoryPool.slice(0, 100));
   } catch (e) {
     console.error('[crawl] fetchAll error:', e.message);
     await logCrawl(env.DB, today, 'ALL', 0, 'error', e.message);
@@ -416,7 +419,7 @@ async function runCrawl(env) {
   }
 
   // 先保存所有 repo 的历史数据（用于计算增量）
-  const allReposFlat = Object.values(allRepos).flat();
+  const allReposFlat = [...Object.values(allRepos).flat(), ...dailyHistoryPool];
   try {
     await saveStarsHistory(env.DB, allReposFlat, today);
     console.log('[crawl] history saved');

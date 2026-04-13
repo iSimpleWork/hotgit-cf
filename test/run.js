@@ -768,6 +768,8 @@ console.log(YELLOW('\nSuite 4: Worker Source Validation'));
   assertContains('worker: potential daily scorer',   src, 'function scorePotentialDailyRepo');
   assertContains('worker: potential daily comparator', src, 'function comparePotentialDailyRepo');
   assertContains('worker: increment uses history table', src, 'LEFT JOIN repo_stars_history h');
+  assertContains('worker: daily pool supports custom limit', src, 'fetchPotentialDailyRepos(db, githubToken, limit = 100)');
+  assertContains('worker: runCrawl expands daily history pool to 300', src, 'fetchPotentialDailyRepos(env.DB, githubToken, 300)');
   assertContains('worker: trending rank metadata', src, '__trendingRank');
   assertContains('worker: search qualifies joined full_name', src, 'repos.full_name LIKE ?');
   assertContains('worker: search qualifies joined description', src, 'repos.description LIKE ?');
