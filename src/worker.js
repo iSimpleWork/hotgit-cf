@@ -583,17 +583,19 @@ async function queryRepos(db, { category, crawlDate, page, perPage, lang, search
       stars_incr: r.history_stars !== null ? r.stars - r.history_stars : null,
       forks_incr: r.history_forks !== null ? r.forks - r.history_forks : null,
     }));
-    const hasHistory = data.some(r => r.stars_incr !== null);
-    if (hasHistory) {
-      data.sort((a, b) => {
-        const aIncr = a.stars_incr ?? -Infinity;
-        const bIncr = b.stars_incr ?? -Infinity;
-        return bIncr - aIncr;
-      });
-    } else {
-      data.sort((a, b) => b.stars - a.stars);
+    if (!isDaily) {
+      const hasHistory = data.some(r => r.stars_incr !== null);
+      if (hasHistory) {
+        data.sort((a, b) => {
+          const aIncr = a.stars_incr ?? -Infinity;
+          const bIncr = b.stars_incr ?? -Infinity;
+          return bIncr - aIncr;
+        });
+      } else {
+        data.sort((a, b) => b.stars - a.stars);
+      }
+      data = data.map((r, i) => ({ ...r, rank: i + 1 }));
     }
-    data = data.map((r, i) => ({ ...r, rank: i + 1 }));
   }
 
   const total = data.length;

@@ -238,10 +238,22 @@ class MockStatement {
       const langs = [...new Set(db._repos.filter(r=>r.crawl_date===p[0]&&r.category===p[1]&&r.language).map(r=>r.language))].sort();
       return { results:langs.map(l=>({language:l})), success:true };
     }
+    if (/LEFT JOIN repo_stars_history/i.test(sql)) {
+      const historyDate = p[0];
+      const filtered = this._filter(p.slice(1)).sort((a, b) => a.rank - b.rank);
+      const results = filtered.map(r => {
+        const h = db._history.find(h => h.full_name === r.full_name && h.crawl_date === historyDate);
+        return {
+          ...r,
+          history_stars: h ? h.stars : null,
+          history_forks: h ? h.forks : null,
+        };
+      });
+      return { results, success: true };
+    }
     if (/SELECT \* FROM repos/i.test(sql)) {
-      const limit = p[p.length-2], offset = p[p.length-1];
-      const filtered = this._filter(p.slice(0,p.length-2)).sort((a,b)=>a.rank-b.rank);
-      return { results:filtered.slice(offset, offset+limit), success:true };
+      const filtered = this._filter(p).sort((a,b)=>a.rank-b.rank);
+      return { results: filtered, success:true };
     }
     return { results:[], success:true };
   }
@@ -278,6 +290,18 @@ async function saveRepos(db, repos, crawlDate) {
   await db.batch(stmts);
 }
 
+async function saveStarsHistory(db, repos, crawlDate) {
+  if (!repos.length) return;
+  const stmts = repos.map(r =>
+    db.prepare(`
+      INSERT INTO repo_stars_history (full_name, crawl_date, stars, forks)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(full_name, crawl_date) DO UPDATE SET stars = excluded.stars, forks = excluded.forks
+    `).bind(r.full_name, crawlDate, r.stars, r.forks ?? 0)
+  );
+  await db.batch(stmts);
+}
+
 async function getLatestDate(db) {
   const row = await db.prepare('SELECT MAX(crawl_date) AS d FROM repos').first();
   return row?.d || null;
@@ -295,16 +319,56 @@ async function getStats(db) {
 async function queryRepos(db, { category, crawlDate, page, perPage, lang, search }) {
   if (!crawlDate) crawlDate = await getLatestDate(db);
   if (!crawlDate) return { total:0, page, per_page:perPage, data:[] };
+  const isDaily = category === 'star_daily';
+  const isWeekly = category === 'star_weekly';
+  const isMonthly = category === 'star_monthly';
+  const isIncrement = isDaily || isWeekly || isMonthly;
+  let historyDate = null;
+  if (isDaily) historyDate = getHistoryDate(crawlDate, 1);
+  else if (isWeekly) historyDate = getHistoryDate(crawlDate, 7);
+  else if (isMonthly) historyDate = getHistoryDate(crawlDate, 30);
+
   const conditions = ['repos.crawl_date = ?', 'repos.category = ?'];
   const params = [crawlDate, category];
   if (lang)   { conditions.push('repos.language = ?'); params.push(lang); }
   if (search) { conditions.push('(repos.full_name LIKE ? OR repos.description LIKE ?)'); params.push(`%${search}%`, `%${search}%`); }
   const where = conditions.join(' AND ');
-  const countRow = await db.prepare(`SELECT COUNT(*) AS n FROM repos WHERE ${where}`).bind(...params).first();
-  const total = countRow?.n || 0;
-  const offset = (page-1)*perPage;
-  const rows = await db.prepare(`SELECT * FROM repos WHERE ${where} ORDER BY rank ASC LIMIT ? OFFSET ?`).bind(...params, perPage, offset).all();
-  return { total, page, per_page:perPage, data:rows.results };
+
+  let rows;
+  if (isIncrement && historyDate) {
+    rows = await db.prepare(
+      `SELECT repos.*, h.stars AS history_stars, h.forks AS history_forks
+       FROM repos
+       LEFT JOIN repo_stars_history h ON repos.full_name = h.full_name AND h.crawl_date = ?
+       WHERE ${where}`
+    ).bind(historyDate, ...params).all();
+  } else {
+    rows = await db.prepare(`SELECT * FROM repos WHERE ${where}`).bind(...params).all();
+  }
+
+  let data = rows.results;
+  if (isIncrement && historyDate) {
+    data = data.map(r => ({
+      ...r,
+      stars_incr: r.history_stars !== null ? r.stars - r.history_stars : null,
+      forks_incr: r.history_forks !== null ? r.forks - r.history_forks : null,
+    }));
+    if (!isDaily) {
+      const hasHistory = data.some(r => r.stars_incr !== null);
+      if (hasHistory) {
+        data.sort((a, b) => (b.stars_incr ?? -Infinity) - (a.stars_incr ?? -Infinity));
+      } else {
+        data.sort((a, b) => b.stars - a.stars);
+      }
+      data = data.map((r, i) => ({ ...r, rank: i + 1 }));
+    }
+  } else {
+    data.sort((a, b) => a.rank - b.rank);
+  }
+
+  const total = data.length;
+  const offset = (page - 1) * perPage;
+  return { total, page, per_page: perPage, data: data.slice(offset, offset + perPage) };
 }
 
 // ── 生成测试数据 ────────────────────────────────────────────────────
@@ -611,6 +675,48 @@ console.log(YELLOW('\nSuite 2: Database Operations (Mock D1)'));
 
   const weeklyLang = await queryRepos(db, { category:'star_weekly', crawlDate:'2026-04-12', page:1, perPage:10, lang:'TypeScript', search:'' });
   assertEqual('weekly language filter: finds TypeScript repo', weeklyLang.total, 1);
+}
+
+{
+  const db = new MockD1();
+  await saveRepos(db, [
+    {
+      category: 'star_daily',
+      rank: 1,
+      full_name: 'trend/first',
+      html_url: 'https://github.com/trend/first',
+      description: 'first trending repo',
+      language: 'TypeScript',
+      stars: 200,
+      forks: 20,
+      open_issues: 1,
+      pushed_at: '2026-04-13 10:00:00',
+      topics: '',
+      homepage: '',
+    },
+    {
+      category: 'star_daily',
+      rank: 2,
+      full_name: 'trend/second',
+      html_url: 'https://github.com/trend/second',
+      description: 'second trending repo',
+      language: 'Python',
+      stars: 500,
+      forks: 50,
+      open_issues: 1,
+      pushed_at: '2026-04-13 10:00:00',
+      topics: '',
+      homepage: '',
+    },
+  ], '2026-04-13');
+  await saveStarsHistory(db, [
+    { full_name: 'trend/first', stars: 100, forks: 10 },
+    { full_name: 'trend/second', stars: 100, forks: 10 },
+  ], '2026-04-12');
+
+  const dailyResult = await queryRepos(db, { category:'star_daily', crawlDate:'2026-04-13', page:1, perPage:10, lang:'', search:'' });
+  assertEqual('daily ranking: preserves stored rank order', dailyResult.data[0].full_name, 'trend/first');
+  assertEqual('daily ranking: still computes stars increment', dailyResult.data[0].stars_incr, 100);
 }
 
 // ── Suite 3: 配置文件校验 ───────────────────────────────────────────
