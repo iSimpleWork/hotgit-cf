@@ -1065,7 +1065,7 @@ function wechatPromoBlock(variant = 'default') {
       <h2 id="${titleId}">关注 HotGit，第一时间发现热门开源项目</h2>
       <p>每日热门项目资讯、增长趋势观察和深度解读会同步到公众号，适合通勤、碎片时间快速浏览。</p>
     </div>
-    <img class="wechat-promo-img" src="/static/img/wechat-promo.png" alt="${WECHAT_PROMO_ALT}" width="960" height="350" loading="lazy" decoding="async"/>
+    <img class="wechat-promo-img" src="/static/img/wechat-promo.png" alt="${WECHAT_PROMO_ALT}" width="640" height="233" loading="lazy" decoding="async"/>
   </section>`;
 }
 
@@ -1155,9 +1155,9 @@ async function pageIndex(env) {
       ? `<p class="hero-date">最新数据：${stats.date}</p>`
       : `<p class="hero-date warning">暂无数据，请访问 <a href="/forceupdate">/forceupdate</a> 立即更新</p>`}
   </section>
-  ${wechatPromoBlock('home')}
   <section class="stats-grid">${catCards}</section>
-  ${dates.length ? `<section class="history"><h2>历史数据</h2><ul class="date-list">${dateList}</ul></section>` : ''}`;
+  ${dates.length ? `<section class="history"><h2>历史数据</h2><ul class="date-list">${dateList}</ul></section>` : ''}
+  ${wechatPromoBlock('home')}`;
 
   return html(baseLayout('HotGit — GitHub 热门仓库追踪', body, {
     description: pageDescription,
@@ -1291,7 +1291,6 @@ async function pageRepos(request, env) {
     <h1>${CATEGORY_LABELS[category] || category}</h1>
     ${crawlDate ? `<p class="data-date">数据日期：${crawlDate}</p>` : ''}
   </div>
-  ${wechatPromoBlock('list')}
   <form class="filter-bar" method="get" action="/repos">
     <input type="hidden" name="category" value="${category}"/>
     <input class="input-search" type="text" name="search" placeholder="搜索项目名/描述…" value="${escHtml(search)}"/>
@@ -1302,7 +1301,8 @@ async function pageRepos(request, env) {
     <a class="btn btn-ghost" href="/repos?category=${category}">重置</a>
   </form>
   <div class="tab-bar">${tabs}</div>
-  ${result.data.length ? `<div class="repo-list">${cards}</div>${pagination}` : emptyState}`;
+  ${result.data.length ? `<div class="repo-list">${cards}</div>${pagination}` : emptyState}
+  ${wechatPromoBlock('list')}`;
 
   return html(baseLayout(`${CATEGORY_LABELS[category] || category} — HotGit`, body, {
     description: pageDescription,
@@ -1543,10 +1543,10 @@ async function pageRepoDetail(env, owner, name) {
   ${repoLink}
   ${topicsHtml}
   ${insightHtml}
-  ${wechatPromoBlock('detail')}
   ${chartHtml}
   ${topicRelatedHtml}
-  ${relatedHtml}`;
+  ${relatedHtml}
+  ${wechatPromoBlock('detail')}`;
 
   const detailJsonLd = jsonLdScript({
     '@context': 'https://schema.org',
@@ -1722,13 +1722,14 @@ a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 .hero-date.warning{color:#e3b341}
 .crawl-status{display:block;margin-top:.75rem;font-size:.9rem;min-height:1.2em}
 .crawl-status.info{color:#58a6ff}.crawl-status.success{color:#3fb950}.crawl-status.error{color:#f85149}
-.wechat-promo{display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,420px);gap:1.25rem;align-items:center;margin:1.5rem 0 2rem;padding:1.25rem;background:linear-gradient(135deg,#102018 0%,#161b22 46%,#0d2137 100%);border:1px solid #2a5c42;border-radius:14px;box-shadow:var(--shadow);overflow:hidden}
-.wechat-promo-home{margin-top:0}
-.wechat-promo-list,.wechat-promo-detail{grid-template-columns:minmax(0,1fr) minmax(240px,360px);padding:1rem;margin-bottom:1.25rem}
+.wechat-promo{display:grid;grid-template-columns:minmax(0,1fr) minmax(170px,240px);gap:1rem;align-items:center;max-width:760px;margin:2.5rem auto 0;padding:1rem;background:linear-gradient(135deg,#111820 0%,#161b22 100%);border:1px solid var(--border);border-radius:12px;box-shadow:none;overflow:hidden}
+.wechat-promo-home{margin-top:2.5rem}
+.wechat-promo-list{margin-top:2rem}
+.wechat-promo-detail{margin-top:2.25rem}
 .promo-eyebrow{display:inline-flex;margin-bottom:.35rem;padding:.14rem .55rem;border-radius:999px;background:#23863622;border:1px solid #2ea04366;color:#7ee787;font-size:.72rem;font-weight:700;letter-spacing:.08em}
-.wechat-promo h2{font-size:1.2rem;margin-bottom:.4rem}
-.wechat-promo p{color:var(--text-muted);font-size:.92rem}
-.wechat-promo-img{width:100%;height:auto;border-radius:10px;background:#fff;box-shadow:0 14px 35px rgba(0,0,0,.28)}
+.wechat-promo h2{font-size:1.02rem;margin-bottom:.35rem}
+.wechat-promo p{color:var(--text-muted);font-size:.85rem;line-height:1.65}
+.wechat-promo-img{width:100%;max-width:240px;height:auto;justify-self:end;border-radius:9px;background:#fff;box-shadow:0 8px 22px rgba(0,0,0,.2)}
 .stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:1rem;margin:2rem 0}
 .stat-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:1.5rem 1.25rem;text-align:center;transition:transform .15s,background .15s,border-color .15s;text-decoration:none!important;color:var(--text)!important}
 .stat-card:hover{background:var(--bg-card-h);transform:translateY(-2px);border-color:var(--accent)}
@@ -1809,6 +1810,6 @@ a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 .trend-chart h2{font-size:1.2rem;margin-bottom:1rem;color:var(--text-muted)}
 .chart-container{position:relative;height:300px}
 .footer{border-top:1px solid var(--border);padding:1.25rem;text-align:center;font-size:.82rem;color:var(--text-muted);background:var(--bg-card)}
-@media(max-width:760px){.wechat-promo{grid-template-columns:1fr}.wechat-promo-img{max-width:520px;margin:0 auto}.wechat-promo-list,.wechat-promo-detail{grid-template-columns:1fr}}
+@media(max-width:760px){.wechat-promo{grid-template-columns:1fr;max-width:520px}.wechat-promo-img{max-width:320px;margin:0 auto;justify-self:center}}
 @media(max-width:640px){.navbar{padding:0 1rem;gap:.75rem}.hero h1{font-size:1.5rem}.repo-card{flex-direction:column;gap:.5rem}.repo-rank{text-align:left}.repo-stats{gap:.75rem}.repo-stats .stat-item{min-width:80px;padding:.75rem}.wechat-promo{padding:1rem}.wechat-promo h2{font-size:1.05rem}}
 `;
