@@ -54,6 +54,7 @@ function fmtRepo(repo, category, rank) {
     pushed_at:   pushedAt,
     topics:      (repo.topics || []).join(','),
     homepage:    repo.homepage || '',
+    project_insight: repo.project_insight || '',
   };
 }
 
@@ -134,6 +135,58 @@ function comparePotentialDailyRepo(a, b) {
   return a.repo.full_name.localeCompare(b.repo.full_name);
 }
 
+function buildProjectInsight(repo, history = [], readmeText = '', homepageMeta = '') {
+  const topics = (repo.topics || '').split(',').filter(Boolean).slice(0, 4);
+  const sourceText = `${repo.description || ''} ${readmeText || ''} ${homepageMeta || ''}`.toLowerCase();
+  const latest = history[history.length - 1];
+  const previous = history.length > 1 ? history[history.length - 2] : null;
+  const dailyGain = latest && previous ? latest.stars - previous.stars : null;
+  const focus = inferProjectFocus(repo, sourceText, topics);
+  const audience = inferProjectAudience(repo, sourceText, topics);
+  const heat = inferProjectHeat(repo, dailyGain);
+  const topicText = topics.length ? `，覆盖 ${topics.slice(0, 2).join('、')}` : '';
+  const homepageHint = homepageMeta ? '结合 README 与项目主页看，' : '';
+  return trimInsight(`${homepageHint}${repo.full_name} 值得关注在于${focus}${topicText}。适合${audience}。最近变热来自${heat}，建议持续观察 Star 增长和社区反馈。`);
+}
+
+function inferProjectFocus(repo, sourceText, topics) {
+  const language = repo.language && repo.language !== 'Unknown' ? `${repo.language} 生态` : '开源生态';
+  const topicText = topics.join(' ');
+  const text = `${sourceText} ${topicText}`.toLowerCase();
+  if (/agent|llm|ai|model|chatbot|rag|人工智能|大模型/.test(text)) return '切中 AI 应用、智能体或大模型工具链需求';
+  if (/database|sql|vector|storage|cache|query|db/.test(text)) return '围绕数据存储、检索或基础设施效率提供方案';
+  if (/ui|component|frontend|react|vue|css|design/.test(text)) return '提升前端研发、组件复用或界面搭建效率';
+  if (/devops|deploy|cloud|kubernetes|docker|serverless|worker/.test(text)) return '聚焦部署、云原生或工程自动化场景';
+  if (/security|auth|crypto|privacy|encrypt/.test(text)) return '关注安全、认证或隐私保护等长期刚需';
+  if (/cli|tool|developer|sdk|api/.test(text)) return '让开发者工具、SDK 或自动化流程更轻量';
+  return `在 ${language} 中提供清晰的问题解决思路`;
+}
+
+function inferProjectAudience(repo, sourceText, topics) {
+  const language = repo.language && repo.language !== 'Unknown' ? `${repo.language} 开发者` : '开发者';
+  const text = `${sourceText} ${topics.join(' ')}`.toLowerCase();
+  if (/agent|llm|ai|model|rag/.test(text)) return 'AI 产品开发者、独立开发者和大模型落地团队';
+  if (/database|sql|vector|storage|cache/.test(text)) return '后端工程师、数据平台团队和检索存储场景';
+  if (/ui|component|frontend|react|vue|css/.test(text)) return '前端工程师、设计工程团队和快速原型项目';
+  if (/devops|deploy|cloud|kubernetes|docker|serverless/.test(text)) return '平台工程、DevOps 团队和交付效率优化场景';
+  return `${language}、开源观察者和寻找新工具的技术团队`;
+}
+
+function inferProjectHeat(repo, dailyGain) {
+  const stars = Number(repo.stars || 0);
+  const forks = Number(repo.forks || 0);
+  const pushedDate = repo.pushed_at ? repo.pushed_at.slice(0, 10) : '';
+  const gainText = dailyGain !== null && dailyGain > 0 ? `近一天新增约 ${fmtNum(dailyGain)} Star、` : '';
+  const updateText = pushedDate ? `最近更新于 ${pushedDate}、` : '';
+  return `${gainText}${updateText}${fmtNum(stars)} Star 与 ${fmtNum(forks)} Fork 带来的关注度积累`;
+}
+
+function trimInsight(text) {
+  const compact = String(text || '').replace(/\s+/g, ' ').trim();
+  if (compact.length <= 150) return compact;
+  return compact.slice(0, 147).replace(/[，。；、\s]+$/u, '') + '。';
+}
+
 function escHtml(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
@@ -194,7 +247,8 @@ class MockStatement {
     if (/^INSERT INTO repos/i.test(sql)) {
       db._repos.push({ id: db._nextId++, crawl_date:p[0], category:p[1], rank:p[2],
         full_name:p[3], html_url:p[4], description:p[5], language:p[6],
-        stars:p[7], forks:p[8], open_issues:p[9], pushed_at:p[10], topics:p[11], homepage:p[12] });
+        stars:p[7], forks:p[8], open_issues:p[9], pushed_at:p[10], topics:p[11], homepage:p[12],
+        translated_name:p[13] || '', translated_desc:p[14] || '', project_insight:p[15] || '' });
       return { results:[], success:true };
     }
     if (/^INSERT INTO repo_stars_history/i.test(sql)) {
@@ -284,8 +338,8 @@ async function saveRepos(db, repos, crawlDate) {
   const category = repos[0].category;
   await db.prepare('DELETE FROM repos WHERE crawl_date = ? AND category = ?').bind(crawlDate, category).run();
   const stmts = repos.map(r =>
-    db.prepare(`INSERT INTO repos (crawl_date,category,rank,full_name,html_url,description,language,stars,forks,open_issues,pushed_at,topics,homepage) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-      .bind(crawlDate, r.category, r.rank, r.full_name, r.html_url, r.description, r.language, r.stars, r.forks, r.open_issues, r.pushed_at, r.topics, r.homepage)
+    db.prepare(`INSERT INTO repos (crawl_date,category,rank,full_name,html_url,description,language,stars,forks,open_issues,pushed_at,topics,homepage,translated_name,translated_desc,project_insight) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .bind(crawlDate, r.category, r.rank, r.full_name, r.html_url, r.description, r.language, r.stars, r.forks, r.open_issues, r.pushed_at, r.topics, r.homepage, r.translated_name || '', r.translated_desc || '', r.project_insight || '')
   );
   await db.batch(stmts);
 }
@@ -568,6 +622,30 @@ assertEqual('fmtNum: 1000 → 1,000',    fmtNum(1000),   '1,000');
 assertEqual('fmtNum: 0 → 0',           fmtNum(0),      '0');
 assertEqual('fmtNum: 1500000',         fmtNum(1500000), '1,500,000');
 
+{
+  const insight = buildProjectInsight(
+    {
+      full_name: 'openai/example-agent',
+      description: 'AI agent framework for building LLM apps',
+      language: 'TypeScript',
+      stars: 12345,
+      forks: 678,
+      pushed_at: '2026-05-21 10:00:00',
+      topics: 'ai,llm,agent,developer-tools',
+    },
+    [
+      { crawl_date: '2026-05-20', stars: 12000 },
+      { crawl_date: '2026-05-21', stars: 12345 },
+    ],
+    'README shows agent orchestration, LLM workflows and developer automation.',
+    'Build production AI agents faster.'
+  );
+  assert('project insight: 80-150 chars', insight.length >= 80 && insight.length <= 150, `length=${insight.length}`);
+  assertContains('project insight: mentions audience', insight, '适合');
+  assertContains('project insight: mentions recent heat', insight, '最近变热');
+  assertContains('project insight: uses daily gain', insight, '345');
+}
+
 assert('sinceDate(1) < todayCST',      sinceDate(1) < todayCST());
 assert('sinceDate(7) < sinceDate(1)',  sinceDate(7) < sinceDate(1));
 assert('sinceDate(30) < sinceDate(7)', sinceDate(30) < sinceDate(7));
@@ -746,6 +824,7 @@ console.log(YELLOW('\nSuite 4: Worker Source Validation'));
 
 {
   const src = readFileSync(path.join(__dirname, '../src/worker.js'), 'utf8');
+  const promoAsset = readFileSync(path.join(__dirname, '../src/wechat-promo.js'), 'utf8');
   assertContains('worker: export default',           src, 'export default');
   assertContains('worker: scheduled handler',        src, 'async scheduled');
   assertContains('worker: fetch handler',            src, 'async fetch');
@@ -763,6 +842,29 @@ console.log(YELLOW('\nSuite 4: Worker Source Validation'));
   assertContains('worker: Adsense account meta',     src, 'ca-pub-0790471852661955');
   assertContains('worker: gtag id',                  src, 'G-RJDEV8XM5Y');
   assertContains('worker: html helper supports status', src, 'function html(content, status = 200)');
+  assertContains('worker: base layout meta description', src, '<meta name="description"');
+  assertContains('worker: canonical links',          src, 'rel="canonical"');
+  assertContains('worker: json ld helper',           src, 'function jsonLdScript');
+  assertContains('worker: wechat promo static route', src, "'/static/img/wechat-promo.png'");
+  assertContains('worker: wechat promo asset module import', src, "from './wechat-promo.js'");
+  assertContains('worker: wechat promo asset export', promoAsset, 'export const WECHAT_PROMO_PNG_BASE64');
+  assertContains('worker: wechat promo copy',        src, '关注 HotGit，第一时间发现热门开源项目');
+  assertContains('worker: github readme fetcher',    src, 'async function githubReadmeText');
+  assertContains('worker: homepage meta fetcher',    src, 'async function fetchHomepageMeta');
+  assertContains('worker: project insight enrichment', src, 'async function enrichProjectInsights');
+  assertContains('worker: project insight saved field', src, 'project_insight');
+  assertContains('worker: detail uses saved insight', src, 'const projectInsight = repo.project_insight ||');
+  assertContains('worker: project insight builder',  src, 'function buildProjectInsight');
+  assertContains('worker: project insight section',  src, 'class="project-insight"');
+  assertContains('worker: project insight heading',  src, '为什么值得关注');
+  assertContains('worker: sitemap repo metadata query', src, 'async function getSitemapRepos');
+  assertContains('worker: sitemap repo-level lastmod', src, 'sitemapRepo.lastmod || latestDate');
+  assertContains('worker: topic related query',      src, 'async function getTopicRelatedRepos');
+  assertContains('worker: topic related section',    src, '同主题相关项目');
+  assertContains('worker: related internal intro',   src, '搜索引擎和读者发现更多相关开源内容');
+  assertContains('worker: r id canonical redirect',  src, 'Response.redirect');
+  assertContains('worker: robots disallows api',     src, 'Disallow: /api/');
+  assertContains('worker: sitemap lastmod',          src, '<lastmod>');
   assertContains('worker: trending parser',          src, 'function parseTrendingRepoNames');
   assertContains('worker: daily fetch uses potential pool', src, "fn: () => fetchPotentialDailyRepos");
   assertContains('worker: potential daily scorer',   src, 'function scorePotentialDailyRepo');
@@ -879,6 +981,12 @@ console.log(YELLOW('\nSuite 6: Star Increment Calculation'));
   assertContains('migration 2: UNIQUE constraint', sql, 'UNIQUE(full_name, crawl_date)');
   assertContains('migration 2: stars column', sql, 'stars');
   assertContains('migration 2: forks column', sql, 'forks');
+}
+
+{
+  const sql = readFileSync(path.join(__dirname, '../migrations/0005_add_project_insight.sql'), 'utf8');
+  assertContains('migration 5: project_insight column', sql, 'project_insight');
+  assertContains('migration 5: alter repos table', sql, 'ALTER TABLE repos');
 }
 
 // ── Suite 5: GitHub Actions 配置校验 ───────────────────────────────

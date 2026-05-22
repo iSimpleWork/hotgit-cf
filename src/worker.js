@@ -13,11 +13,15 @@
  *     POST /api/crawl     → 手动触发爬取（需要 X-Admin-Token 头）
  *  3. 静态资源通过 __STATIC_CONTENT 或内联方式提供
  */
+import { WECHAT_PROMO_PNG_BASE64 } from './wechat-promo.js';
 
 // ── 常量 ───────────────────────────────────────────────────────────────
 const GITHUB_API   = 'https://api.github.com';
 const USER_AGENT   = 'hotgit-cf/1.0 (https://github.com/hotgit)';
 const DEFAULT_DOMAIN = 'hotgit-cf.linkai.workers.dev';
+const SITE_NAME = 'HotGit';
+const SITE_DESCRIPTION = 'HotGit 每日追踪 GitHub 热门仓库、Star 增长趋势和开源项目潜力榜，帮开发者及时发现值得关注的开源项目。';
+const WECHAT_PROMO_ALT = 'HotGit 公众号二维码，扫码关注获取最新热门项目资讯及深度解读';
 
 let DOMAIN = DEFAULT_DOMAIN;
 
@@ -153,6 +157,62 @@ async function githubRepo(fullName, githubToken) {
   }
 
   return res.json();
+}
+
+async function githubReadmeText(fullName, githubToken) {
+  const headers = {
+    Accept: 'application/vnd.github.v3+json',
+    'User-Agent': USER_AGENT,
+  };
+  if (githubToken) headers['Authorization'] = `token ${githubToken}`;
+
+  try {
+    const res = await fetch(`${GITHUB_API}/repos/${fullName}/readme`, {
+      headers,
+      cf: { cacheTtl: 3600, cacheEverything: false },
+    });
+    if (!res.ok) return '';
+    const data = await res.json();
+    if (!data?.content) return '';
+    const raw = atob(String(data.content).replace(/\s+/g, ''));
+    return cleanMarkdownText(raw).slice(0, 3000);
+  } catch (e) {
+    console.error('[githubReadmeText] error:', fullName, e.message);
+    return '';
+  }
+}
+
+async function fetchHomepageMeta(homepage) {
+  if (!homepage || !/^https?:\/\//i.test(homepage)) return '';
+  try {
+    const res = await fetch(homepage, {
+      headers: {
+        Accept: 'text/html,application/xhtml+xml',
+        'User-Agent': USER_AGENT,
+      },
+      cf: { cacheTtl: 3600, cacheEverything: false },
+    });
+    if (!res.ok) return '';
+    const html = (await res.text()).slice(0, 12000);
+    const title = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || '';
+    const desc = html.match(/<meta[^>]+(?:name|property)=["'](?:description|og:description)["'][^>]+content=["']([^"']+)["']/i)?.[1] || '';
+    return cleanMarkdownText(`${title} ${desc}`).slice(0, 500);
+  } catch (e) {
+    console.error('[fetchHomepageMeta] error:', homepage, e.message);
+    return '';
+  }
+}
+
+function cleanMarkdownText(text) {
+  return String(text || '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`[^`]*`/g, ' ')
+    .replace(/!\[[^\]]*]\([^)]*\)/g, ' ')
+    .replace(/\[([^\]]+)]\([^)]*\)/g, '$1')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/[#>*_\-|]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function parseTrendingRepoNames(html) {
@@ -343,6 +403,7 @@ function fmtRepo(repo, category, rank) {
     pushed_at:   pushedAt,
     topics:      (repo.topics || []).join(','),
     homepage:    repo.homepage || '',
+    project_insight: repo.project_insight || '',
   };
 }
 
@@ -427,8 +488,10 @@ async function runCrawl(env) {
     console.error('[crawl] save history error:', e.message);
   }
 
+  const insightCache = new Map();
   for (const [category, repos] of Object.entries(allRepos)) {
     try {
+      await enrichProjectInsights(env.DB, repos, githubToken, today, insightCache);
       // 先翻译并保存
       await translateAndSaveRepos(env.DB, repos);
       await saveRepos(env.DB, repos, today);
@@ -461,16 +524,54 @@ async function saveRepos(db, repos, crawlDate) {
       INSERT INTO repos
         (crawl_date, category, rank, full_name, html_url, description,
          language, stars, forks, open_issues, pushed_at, topics, homepage,
-         translated_name, translated_desc)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+         translated_name, translated_desc, project_insight)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).bind(
       crawlDate, r.category, r.rank, r.full_name, r.html_url,
       r.description, r.language, r.stars, r.forks, r.open_issues,
       r.pushed_at, r.topics, r.homepage,
-      r.translated_name || '', r.translated_desc || ''
+      r.translated_name || '', r.translated_desc || '', r.project_insight || ''
     )
   );
   await db.batch(stmts);
+}
+
+async function enrichProjectInsights(db, repos, githubToken, crawlDate, insightCache = new Map()) {
+  for (const repo of repos) {
+    if (!repo?.full_name) continue;
+    if (repo.project_insight) continue;
+
+    const cached = insightCache.get(repo.full_name);
+    if (cached) {
+      repo.project_insight = cached;
+      continue;
+    }
+
+    const historyDate = getInsightHistoryDate(repo.category, crawlDate);
+    const history = historyDate ? await getHistoryStars(db, repo.full_name, historyDate) : null;
+    const historyPoints = history
+      ? [{ crawl_date: historyDate, stars: history.stars }, { crawl_date: crawlDate, stars: repo.stars }]
+      : [{ crawl_date: crawlDate, stars: repo.stars }];
+
+    const [readmeResult, homepageResult] = await Promise.allSettled([
+      githubReadmeText(repo.full_name, githubToken),
+      fetchHomepageMeta(repo.homepage || ''),
+    ]);
+    const readmeText = readmeResult.status === 'fulfilled' ? readmeResult.value : '';
+    const homepageMeta = homepageResult.status === 'fulfilled' ? homepageResult.value : '';
+    repo.project_insight = buildProjectInsight(repo, historyPoints, readmeText, homepageMeta);
+    insightCache.set(repo.full_name, repo.project_insight);
+
+    // README/主页抓取属于增强信息，轻微限速避免对外部服务造成压力。
+    await new Promise(r => setTimeout(r, 120));
+  }
+}
+
+function getInsightHistoryDate(category, crawlDate) {
+  if (!crawlDate) return null;
+  if (category === 'star_weekly') return getHistoryDate(crawlDate, 7);
+  if (category === 'star_monthly') return getHistoryDate(crawlDate, 30);
+  return getHistoryDate(crawlDate, 1);
 }
 
 async function translateAndSaveRepos(db, repos) {
@@ -680,6 +781,29 @@ async function getRelatedRepos(db, language, excludeFullName, crawlDate, limit =
   return rows2.results;
 }
 
+async function getTopicRelatedRepos(db, topics, excludeFullName, crawlDate, limit = 10) {
+  const topicList = String(topics || '').split(',').map(t => t.trim()).filter(Boolean).slice(0, 6);
+  if (!topicList.length) return [];
+  if (!crawlDate) crawlDate = await getLatestDate(db);
+  if (!crawlDate) return [];
+
+  const conditions = topicList.map(() => 'topics LIKE ?').join(' OR ');
+  const params = topicList.map(t => `%${t}%`);
+  const rows = await db.prepare(
+    `SELECT full_name, MAX(stars) as stars, MAX(forks) as forks, MAX(html_url) as html_url,
+            MAX(description) as description, MAX(language) as language, MAX(pushed_at) as pushed_at,
+            MAX(topics) as topics, MAX(homepage) as homepage, MAX(open_issues) as open_issues,
+            MAX(rank) as rank, MAX(id) as id
+     FROM repos
+     WHERE crawl_date = ? AND full_name != ? AND (${conditions})
+     GROUP BY full_name
+     ORDER BY stars DESC
+     LIMIT ?`
+  ).bind(crawlDate, excludeFullName, ...params, limit).all();
+
+  return rows.results;
+}
+
 async function getRepoHistory(db, fullName, days = 30) {
   try {
     const rows = await db.prepare(
@@ -768,6 +892,17 @@ async function getAllRepoNames(db, limit = 1000) {
   return rows.results.map(r => r.full_name);
 }
 
+async function getSitemapRepos(db, limit = 1000) {
+  const rows = await db.prepare(
+    `SELECT full_name, MAX(crawl_date) as lastmod, MAX(stars) as stars
+     FROM repos
+     GROUP BY full_name
+     ORDER BY lastmod DESC, stars DESC
+     LIMIT ?`
+  ).bind(limit).all();
+  return rows.results;
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // API 处理器
 // ══════════════════════════════════════════════════════════════════════
@@ -826,7 +961,22 @@ function handleStatic(path) {
   if (path === '/static/css/style.css') {
     return new Response(CSS, { headers: { 'Content-Type': 'text/css; charset=utf-8', 'Cache-Control': 'public,max-age=86400' } });
   }
+  if (path === '/static/img/wechat-promo.png') {
+    return imageFromBase64(WECHAT_PROMO_PNG_BASE64, 'image/png');
+  }
   return new Response('Not Found', { status: 404 });
+}
+
+function imageFromBase64(base64, contentType) {
+  const binary = atob(base64.replace(/\s+/g, ''));
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new Response(bytes, {
+    headers: {
+      'Content-Type': contentType,
+      'Cache-Control': 'public,max-age=604800,immutable',
+    }
+  });
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -850,15 +1000,32 @@ const ANALYTICS_HEAD_SNIPPET = `
     gtag('config', 'G-RJDEV8XM5Y');
   </script>`;
 
-function baseLayout(title, bodyContent) {
+function baseLayout(title, bodyContent, options = {}) {
+  const description = options.description || SITE_DESCRIPTION;
+  const canonicalUrl = options.canonicalUrl || '';
+  const robots = options.robots || '';
+  const ogType = options.ogType || 'website';
+  const extraHead = options.extraHead || '';
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-  <title>${title}</title>
+  <title>${escHtml(title)}</title>
+  <meta name="description" content="${escHtml(description)}"/>
+  ${canonicalUrl ? `<link rel="canonical" href="${escHtml(canonicalUrl)}"/>` : ''}
+  ${robots ? `<meta name="robots" content="${escHtml(robots)}"/>` : ''}
+  <meta property="og:site_name" content="${SITE_NAME}"/>
+  <meta property="og:title" content="${escHtml(title)}"/>
+  <meta property="og:description" content="${escHtml(description)}"/>
+  ${canonicalUrl ? `<meta property="og:url" content="${escHtml(canonicalUrl)}"/>` : ''}
+  <meta property="og:type" content="${escHtml(ogType)}"/>
+  <meta name="twitter:card" content="summary"/>
+  <meta name="twitter:title" content="${escHtml(title)}"/>
+  <meta name="twitter:description" content="${escHtml(description)}"/>
   <link rel="stylesheet" href="/static/css/style.css"/>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔥</text></svg>"/>
+  ${extraHead}
 ${ANALYTICS_HEAD_SNIPPET}
 </head>
 <body>
@@ -881,9 +1048,89 @@ ${ANALYTICS_HEAD_SNIPPET}
 </html>`;
 }
 
+function siteUrl(env, path = '/') {
+  return `https://${getDomain(env)}${path}`;
+}
+
+function jsonLdScript(data) {
+  return `<script type="application/ld+json">${JSON.stringify(data).replace(/</g, '\\u003c')}</script>`;
+}
+
+function wechatPromoBlock(variant = 'default') {
+  const titleId = `wechat-promo-title-${variant}`;
+  return `
+  <section class="wechat-promo wechat-promo-${variant}" aria-labelledby="${titleId}">
+    <div class="wechat-promo-copy">
+      <p class="promo-eyebrow">公众号同步更新</p>
+      <h2 id="${titleId}">关注 HotGit，第一时间发现热门开源项目</h2>
+      <p>每日热门项目资讯、增长趋势观察和深度解读会同步到公众号，适合通勤、碎片时间快速浏览。</p>
+    </div>
+    <img class="wechat-promo-img" src="/static/img/wechat-promo.png" alt="${WECHAT_PROMO_ALT}" width="960" height="350" loading="lazy" decoding="async"/>
+  </section>`;
+}
+
+function buildProjectInsight(repo, history = [], readmeText = '', homepageMeta = '') {
+  const topics = (repo.topics || '').split(',').filter(Boolean).slice(0, 4);
+  const sourceText = `${repo.description || ''} ${readmeText || ''} ${homepageMeta || ''}`.toLowerCase();
+  const latest = history[history.length - 1];
+  const previous = history.length > 1 ? history[history.length - 2] : null;
+  const dailyGain = latest && previous ? latest.stars - previous.stars : null;
+
+  const focus = inferProjectFocus(repo, sourceText, topics);
+  const audience = inferProjectAudience(repo, sourceText, topics);
+  const heat = inferProjectHeat(repo, dailyGain);
+  const topicText = topics.length ? `，覆盖 ${topics.slice(0, 2).join('、')}` : '';
+  const homepageHint = homepageMeta ? '结合 README 与项目主页看，' : '';
+
+  return trimInsight(
+    `${homepageHint}${repo.full_name} 值得关注在于${focus}${topicText}。适合${audience}。最近变热来自${heat}，建议持续观察 Star 增长和社区反馈。`
+  );
+}
+
+function inferProjectFocus(repo, sourceText, topics) {
+  const language = repo.language && repo.language !== 'Unknown' ? `${repo.language} 生态` : '开源生态';
+  const topicText = topics.join(' ');
+  const text = `${sourceText} ${topicText}`.toLowerCase();
+
+  if (/agent|llm|ai|model|chatbot|rag|人工智能|大模型/.test(text)) return '切中 AI 应用、智能体或大模型工具链需求';
+  if (/database|sql|vector|storage|cache|query|db/.test(text)) return '围绕数据存储、检索或基础设施效率提供方案';
+  if (/ui|component|frontend|react|vue|css|design/.test(text)) return '提升前端研发、组件复用或界面搭建效率';
+  if (/devops|deploy|cloud|kubernetes|docker|serverless|worker/.test(text)) return '聚焦部署、云原生或工程自动化场景';
+  if (/security|auth|crypto|privacy|encrypt/.test(text)) return '关注安全、认证或隐私保护等长期刚需';
+  if (/cli|tool|developer|sdk|api/.test(text)) return '让开发者工具、SDK 或自动化流程更轻量';
+  return `在 ${language} 中提供清晰的问题解决思路`;
+}
+
+function inferProjectAudience(repo, sourceText, topics) {
+  const language = repo.language && repo.language !== 'Unknown' ? `${repo.language} 开发者` : '开发者';
+  const text = `${sourceText} ${topics.join(' ')}`.toLowerCase();
+  if (/agent|llm|ai|model|rag/.test(text)) return 'AI 产品开发者、独立开发者和大模型落地团队';
+  if (/database|sql|vector|storage|cache/.test(text)) return '后端工程师、数据平台团队和检索存储场景';
+  if (/ui|component|frontend|react|vue|css/.test(text)) return '前端工程师、设计工程团队和快速原型项目';
+  if (/devops|deploy|cloud|kubernetes|docker|serverless/.test(text)) return '平台工程、DevOps 团队和交付效率优化场景';
+  return `${language}、开源观察者和寻找新工具的技术团队`;
+}
+
+function inferProjectHeat(repo, dailyGain) {
+  const stars = Number(repo.stars || 0);
+  const forks = Number(repo.forks || 0);
+  const pushedDate = repo.pushed_at ? repo.pushed_at.slice(0, 10) : '';
+  const gainText = dailyGain !== null && dailyGain > 0 ? `近一天新增约 ${fmtNum(dailyGain)} Star、` : '';
+  const updateText = pushedDate ? `最近更新于 ${pushedDate}、` : '';
+  return `${gainText}${updateText}${fmtNum(stars)} Star 与 ${fmtNum(forks)} Fork 带来的关注度积累`;
+}
+
+function trimInsight(text) {
+  const compact = String(text || '').replace(/\s+/g, ' ').trim();
+  if (compact.length <= 150) return compact;
+  return compact.slice(0, 147).replace(/[，。；、\s]+$/u, '') + '。';
+}
+
 async function pageIndex(env) {
   const stats = await getStats(env.DB);
   const dates = await getCrawlDates(env.DB);
+  const canonicalUrl = siteUrl(env, '/');
+  const pageDescription = 'HotGit 每天自动追踪 GitHub Star、Fork、日增、周增、月增榜单，帮助开发者及时发现增长快、有潜力的开源项目。';
 
   const catCards = Object.entries(CATEGORY_LABELS).map(([cat, lbl]) => {
     const cnt = stats.categories?.[cat];
@@ -908,20 +1155,43 @@ async function pageIndex(env) {
       ? `<p class="hero-date">最新数据：${stats.date}</p>`
       : `<p class="hero-date warning">暂无数据，请访问 <a href="/forceupdate">/forceupdate</a> 立即更新</p>`}
   </section>
+  ${wechatPromoBlock('home')}
   <section class="stats-grid">${catCards}</section>
   ${dates.length ? `<section class="history"><h2>历史数据</h2><ul class="date-list">${dateList}</ul></section>` : ''}`;
 
-  return html(baseLayout('HotGit — GitHub 热门仓库追踪', body));
+  return html(baseLayout('HotGit — GitHub 热门仓库追踪', body, {
+    description: pageDescription,
+    canonicalUrl,
+    extraHead: jsonLdScript({
+      '@context': 'https://schema.org',
+      '@type': 'WebSite',
+      name: SITE_NAME,
+      url: canonicalUrl,
+      description: pageDescription,
+      inLanguage: 'zh-CN',
+      potentialAction: {
+        '@type': 'SearchAction',
+        target: `${siteUrl(env, '/repos')}?search={search_term_string}`,
+        'query-input': 'required name=search_term_string'
+      }
+    })
+  }));
 }
 
 async function pageRepos(request, env) {
   const q         = new URL(request.url).searchParams;
-  const category  = q.get('category') || 'top_stars';
+  const requestedCategory = q.get('category') || 'top_stars';
+  const category  = CATEGORY_LABELS[requestedCategory] ? requestedCategory : 'top_stars';
   const page      = parseIntParam(q.get('page'),     1);
   const perPage   = parseIntParam(q.get('per_page'), 20);
   const lang      = q.get('lang')   || '';
   const search    = q.get('search') || '';
   const crawlDate = q.get('date')   || await getLatestDate(env.DB);
+  const canonicalParams = new URLSearchParams({ category });
+  if (crawlDate) canonicalParams.set('date', crawlDate);
+  const canonicalUrl = siteUrl(env, `/repos?${canonicalParams.toString()}`);
+  const shouldNoIndex = Boolean(search || lang || page > 1 || perPage !== 20 || requestedCategory !== category);
+  const pageDescription = `${CATEGORY_LABELS[category]}：查看 ${crawlDate || '最新'} GitHub 热门仓库榜单，跟踪项目 Star、Fork、语言、主题和增长趋势。`;
 
   const result  = await queryRepos(env.DB, { category, crawlDate, page, perPage, lang, search });
   const langs   = await getLanguages(env.DB, category, crawlDate);
@@ -1021,6 +1291,7 @@ async function pageRepos(request, env) {
     <h1>${CATEGORY_LABELS[category] || category}</h1>
     ${crawlDate ? `<p class="data-date">数据日期：${crawlDate}</p>` : ''}
   </div>
+  ${wechatPromoBlock('list')}
   <form class="filter-bar" method="get" action="/repos">
     <input type="hidden" name="category" value="${category}"/>
     <input class="input-search" type="text" name="search" placeholder="搜索项目名/描述…" value="${escHtml(search)}"/>
@@ -1033,7 +1304,28 @@ async function pageRepos(request, env) {
   <div class="tab-bar">${tabs}</div>
   ${result.data.length ? `<div class="repo-list">${cards}</div>${pagination}` : emptyState}`;
 
-  return html(baseLayout(`${CATEGORY_LABELS[category] || category} — HotGit`, body));
+  return html(baseLayout(`${CATEGORY_LABELS[category] || category} — HotGit`, body, {
+    description: pageDescription,
+    canonicalUrl,
+    robots: shouldNoIndex ? 'noindex,follow' : '',
+    extraHead: jsonLdScript({
+      '@context': 'https://schema.org',
+      '@type': 'CollectionPage',
+      name: `${CATEGORY_LABELS[category]} — ${SITE_NAME}`,
+      url: canonicalUrl,
+      description: pageDescription,
+      inLanguage: 'zh-CN',
+      mainEntity: {
+        '@type': 'ItemList',
+        itemListElement: result.data.slice(0, 20).map((repo, index) => ({
+          '@type': 'ListItem',
+          position: (page - 1) * perPage + index + 1,
+          url: siteUrl(env, `/repo/${encodeURIComponent(repo.full_name.split('/')[0])}/${encodeURIComponent(repo.full_name.split('/').slice(1).join('/'))}`),
+          name: repo.full_name
+        }))
+      }
+    })
+  }));
 }
 
 async function pageForceUpdate(env) {
@@ -1050,6 +1342,7 @@ async function pageForceUpdate(env) {
     { name: 'star_weekly',  label: CATEGORY_LABELS.star_weekly,  fn: () => githubSearch('stars:>100',            'stars', env.GITHUB_TOKEN || '') },
     { name: 'star_monthly', label: CATEGORY_LABELS.star_monthly, fn: () => githubSearch('stars:>100',             'stars', env.GITHUB_TOKEN || '') },
   ];
+  const insightCache = new Map();
 
   for (const task of tasks) {
     const t0 = Date.now();
@@ -1058,6 +1351,7 @@ async function pageForceUpdate(env) {
       const repos = task.name === 'star_daily'
         ? items
         : items.slice(0, 100).map((r, i) => fmtRepo(r, task.name, i + 1));
+      await enrichProjectInsights(env.DB, repos, env.GITHUB_TOKEN || '', today, insightCache);
       await translateAndSaveRepos(env.DB, repos);
       await saveRepos(env.DB, repos, today);
       await logCrawl(env.DB, today, task.name, repos.length, 'ok', '');
@@ -1105,7 +1399,11 @@ async function pageForceUpdate(env) {
     <a class="btn btn-ghost" href="/forceupdate">再次更新</a>
   </div>`;
 
-  return html(baseLayout('立即更新 — HotGit', body));
+  return html(baseLayout('立即更新 — HotGit', body, {
+    description: '手动触发 HotGit 数据更新，仅供站点维护使用。',
+    canonicalUrl: siteUrl(env, '/forceupdate'),
+    robots: 'noindex,nofollow'
+  }));
 }
 
 async function pageRepoDetail(env, owner, name) {
@@ -1113,17 +1411,22 @@ async function pageRepoDetail(env, owner, name) {
   const repo = await getRepoByName(env.DB, fullName);
   
   if (!repo) {
-    return html(`<!DOCTYPE html>
-<html lang="zh-CN">
-<head><meta charset="UTF-8"/><title>仓库未找到 — HotGit</title>${ANALYTICS_HEAD_SNIPPET}
-</head>
-<body><h1>仓库未找到</h1><p>${escHtml(fullName)} 不在热门榜单中</p><a href="/">返回首页</a></body>
-</html>`, 404);
+    return html(baseLayout('仓库未找到 — HotGit', `
+      <section class="empty-state">
+        <h1>仓库未找到</h1>
+        <p>${escHtml(fullName)} 不在热门榜单中。</p>
+        <a class="btn btn-primary" href="/">返回首页</a>
+      </section>`, {
+      description: `${fullName} 暂未收录在 HotGit 热门榜单中。`,
+      robots: 'noindex,follow'
+    }), 404);
   }
 
   const history = await getRepoHistory(env.DB, fullName, 30);
   const related = await getRelatedRepos(env.DB, repo.language, fullName);
+  const topicRelated = await getTopicRelatedRepos(env.DB, repo.topics, fullName);
   const crawlDate = await getLatestDate(env.DB);
+  const projectInsight = repo.project_insight || buildProjectInsight(repo, history, '', '');
   
   const title = `${repo.full_name} — HotGit`;
   const description = repo.description || `${repo.full_name} - ${repo.language} 项目，⭐ ${fmtNum(repo.stars)} Stars`;
@@ -1155,6 +1458,13 @@ async function pageRepoDetail(env, owner, name) {
   const topicsHtml = repo.topics 
     ? `<div class="repo-topics">${repo.topics.split(',').filter(Boolean).map(t => `<span class="topic-tag">${escHtml(t)}</span>`).join('')}</div>` 
     : '';
+
+  const insightHtml = `
+    <section class="project-insight" aria-labelledby="project-insight-title">
+      <div class="insight-kicker">项目观察</div>
+      <h2 id="project-insight-title">为什么值得关注</h2>
+      <p>${escHtml(projectInsight)}</p>
+    </section>`;
 
   const chartHtml = history.length > 0 
     ? `<section class="trend-chart">
@@ -1215,29 +1525,71 @@ async function pageRepoDetail(env, owner, name) {
       </a>`).join('')}</div></section>`
     : '';
 
+  const topicRelatedHtml = topicRelated.length
+    ? `<section class="related-repos topic-related"><h2>同主题相关项目</h2><p class="related-intro">继续浏览这些主题相近的项目，帮助搜索引擎和读者发现更多相关开源内容。</p><div class="repo-list">${topicRelated.map(r => `
+      <a class="repo-card" href="/r/${r.id}">
+        <div class="repo-main">
+          <div class="repo-title-line"><span class="repo-name">${escHtml(r.full_name)}</span>${r.language && r.language !== 'Unknown' ? `<span class="lang-badge">${escHtml(r.language)}</span>` : ''}</div>
+          ${r.description ? `<p class="repo-desc">${escHtml(r.description)}</p>` : ''}
+          <div class="repo-meta"><span>⭐ ${fmtNum(r.stars)}</span><span>🍴 ${fmtNum(r.forks)}</span></div>
+        </div>
+      </a>`).join('')}</div></section>`
+    : '';
+
   const domain = getDomain(env);
   const canonicalUrl = `https://${domain}/repo/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`;
 
   const body = `
   ${repoLink}
   ${topicsHtml}
+  ${insightHtml}
+  ${wechatPromoBlock('detail')}
   ${chartHtml}
+  ${topicRelatedHtml}
   ${relatedHtml}`;
+
+  const detailJsonLd = jsonLdScript({
+    '@context': 'https://schema.org',
+    '@type': 'SoftwareSourceCode',
+    name: repo.full_name,
+    description,
+    url: canonicalUrl,
+    codeRepository: repo.html_url,
+    programmingLanguage: repo.language && repo.language !== 'Unknown' ? repo.language : undefined,
+    dateModified: repo.pushed_at ? repo.pushed_at.slice(0, 10) : undefined,
+    interactionStatistic: [
+      {
+        '@type': 'InteractionCounter',
+        interactionType: 'https://schema.org/LikeAction',
+        userInteractionCount: Number(repo.stars || 0)
+      },
+      {
+        '@type': 'InteractionCounter',
+        interactionType: 'https://schema.org/ForkAction',
+        userInteractionCount: Number(repo.forks || 0)
+      }
+    ]
+  });
 
   const htmlContent = `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-  <title>${title}</title>
-  <meta name="description" content="${description}"/>
-  <link rel="canonical" href="${canonicalUrl}"/>
-  <meta property="og:title" content="${title}"/>
-  <meta property="og:description" content="${description}"/>
-  <meta property="og:url" content="${canonicalUrl}"/>
+  <title>${escHtml(title)}</title>
+  <meta name="description" content="${escHtml(description)}"/>
+  <link rel="canonical" href="${escHtml(canonicalUrl)}"/>
+  <meta property="og:site_name" content="${SITE_NAME}"/>
+  <meta property="og:title" content="${escHtml(title)}"/>
+  <meta property="og:description" content="${escHtml(description)}"/>
+  <meta property="og:url" content="${escHtml(canonicalUrl)}"/>
   <meta property="og:type" content="article"/>
+  <meta name="twitter:card" content="summary"/>
+  <meta name="twitter:title" content="${escHtml(title)}"/>
+  <meta name="twitter:description" content="${escHtml(description)}"/>
   <link rel="stylesheet" href="/static/css/style.css"/>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔥</text></svg>"/>
+  ${detailJsonLd}
 ${ANALYTICS_HEAD_SNIPPET}
 </head>
 <body>
@@ -1268,37 +1620,48 @@ async function pageRepoDetailById(env, id) {
   const repo = await getRepoById(env.DB, id);
   
   if (!repo) {
-    return html(`<!DOCTYPE html>
-<html lang="zh-CN">
-<head><meta charset="UTF-8"/><title>仓库未找到 — HotGit</title>${ANALYTICS_HEAD_SNIPPET}
-</head>
-<body><h1>仓库未找到</h1><p>ID: ${id} 不在热门榜单中</p><a href="/">返回首页</a></body>
-</html>`, 404);
+    return html(baseLayout('仓库未找到 — HotGit', `
+      <section class="empty-state">
+        <h1>仓库未找到</h1>
+        <p>ID: ${id} 不在热门榜单中。</p>
+        <a class="btn btn-primary" href="/">返回首页</a>
+      </section>`, {
+      description: `ID ${id} 暂未收录在 HotGit 热门榜单中。`,
+      robots: 'noindex,follow'
+    }), 404);
   }
 
-  return pageRepoDetail(env, repo.full_name.split('/')[0], repo.full_name.split('/')[1]);
+  const [owner, ...nameParts] = repo.full_name.split('/');
+  const name = nameParts.join('/');
+  return Response.redirect(siteUrl(env, `/repo/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`), 301);
 }
 
 async function pageSitemap(env) {
   const domain = getDomain(env);
   const host = `https://${domain}`;
-  const repoNames = await getAllRepoNames(env.DB);
+  const sitemapRepos = await getSitemapRepos(env.DB);
   const dates = await getCrawlDates(env.DB);
+  const latestDate = dates[0] || '';
+  const sitemapEntry = (loc, changefreq, priority, lastmod = latestDate) => `
+  <url><loc>${escXml(loc)}</loc>${lastmod ? `<lastmod>${escXml(lastmod)}</lastmod>` : ''}<changefreq>${changefreq}</changefreq><priority>${priority}</priority></url>`;
   
   let xml = `<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>${host}/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>
-  <url><loc>${host}/repos</loc><changefreq>daily</changefreq><priority>0.9</priority></url>
-  <url><loc>${host}/repos?category=top_stars</loc><changefreq>daily</changefreq><priority>0.8</priority></url>
-  <url><loc>${host}/repos?category=top_forks</loc><changefreq>daily</changefreq><priority>0.8</priority></url>
-  <url><loc>${host}/repos?category=star_daily</loc><changefreq>daily</changefreq><priority>0.8</priority></url>
-  <url><loc>${host}/repos?category=star_weekly</loc><changefreq>weekly</changefreq><priority>0.8</priority></url>
-  <url><loc>${host}/repos?category=star_monthly</loc><changefreq>weekly</changefreq><priority>0.8</priority></url>`;
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">`;
 
-  for (const name of repoNames) {
-    const [owner, repo] = name.split('/');
-    xml += `
-  <url><loc>${host}/repo/${owner}/${repo}</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>`;
+  xml += sitemapEntry(`${host}/`, 'daily', '1.0');
+  xml += sitemapEntry(`${host}/repos`, 'daily', '0.9');
+  for (const category of Object.keys(CATEGORY_LABELS)) {
+    const freq = category === 'star_monthly' || category === 'star_weekly' ? 'weekly' : 'daily';
+    xml += sitemapEntry(`${host}/repos?category=${encodeURIComponent(category)}`, freq, '0.8');
+  }
+  for (const date of dates.slice(0, 30)) {
+    xml += sitemapEntry(`${host}/repos?date=${encodeURIComponent(date)}`, 'daily', '0.6', date);
+  }
+
+  for (const sitemapRepo of sitemapRepos) {
+    const [owner, ...repoParts] = sitemapRepo.full_name.split('/');
+    const repo = repoParts.join('/');
+    xml += sitemapEntry(`${host}/repo/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`, 'weekly', '0.7', sitemapRepo.lastmod || latestDate);
   }
 
   xml += `
@@ -1313,6 +1676,8 @@ function pageRobots(env) {
   const domain = getDomain(env);
   const robots = `User-agent: *
 Allow: /
+Disallow: /api/
+Disallow: /forceupdate
 
 Sitemap: https://${domain}/sitemap.xml
 `;
@@ -1324,6 +1689,9 @@ Sitemap: https://${domain}/sitemap.xml
 // ── 工具函数 ───────────────────────────────────────────────────────────
 function escHtml(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function escXml(s) {
+  return escHtml(s).replace(/'/g,'&apos;');
 }
 function fmtNum(n) {
   return Number(n).toLocaleString('en-US');
@@ -1354,6 +1722,13 @@ a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 .hero-date.warning{color:#e3b341}
 .crawl-status{display:block;margin-top:.75rem;font-size:.9rem;min-height:1.2em}
 .crawl-status.info{color:#58a6ff}.crawl-status.success{color:#3fb950}.crawl-status.error{color:#f85149}
+.wechat-promo{display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,420px);gap:1.25rem;align-items:center;margin:1.5rem 0 2rem;padding:1.25rem;background:linear-gradient(135deg,#102018 0%,#161b22 46%,#0d2137 100%);border:1px solid #2a5c42;border-radius:14px;box-shadow:var(--shadow);overflow:hidden}
+.wechat-promo-home{margin-top:0}
+.wechat-promo-list,.wechat-promo-detail{grid-template-columns:minmax(0,1fr) minmax(240px,360px);padding:1rem;margin-bottom:1.25rem}
+.promo-eyebrow{display:inline-flex;margin-bottom:.35rem;padding:.14rem .55rem;border-radius:999px;background:#23863622;border:1px solid #2ea04366;color:#7ee787;font-size:.72rem;font-weight:700;letter-spacing:.08em}
+.wechat-promo h2{font-size:1.2rem;margin-bottom:.4rem}
+.wechat-promo p{color:var(--text-muted);font-size:.92rem}
+.wechat-promo-img{width:100%;height:auto;border-radius:10px;background:#fff;box-shadow:0 14px 35px rgba(0,0,0,.28)}
 .stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:1rem;margin:2rem 0}
 .stat-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:1.5rem 1.25rem;text-align:center;transition:transform .15s,background .15s,border-color .15s;text-decoration:none!important;color:var(--text)!important}
 .stat-card:hover{background:var(--bg-card-h);transform:translateY(-2px);border-color:var(--accent)}
@@ -1424,10 +1799,16 @@ a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 .related-repos .repo-title-line{display:flex;align-items:center;gap:.5rem;margin-bottom:.35rem}
 .related-repos .repo-name{font-size:1rem;font-weight:600}
 .related-repos .repo-meta{display:flex;gap:1rem;font-size:.82rem;color:var(--text-muted)}
+.related-intro{color:var(--text-muted);font-size:.88rem;margin:-.4rem 0 1rem}
 .repo-desc-trans{color:var(--text-muted);font-size:.95rem;margin-top:.5rem}
+.project-insight{margin:1.5rem 0;padding:1.25rem 1.35rem;background:linear-gradient(135deg,#161b22 0%,#101722 100%);border:1px solid #2a4d6f;border-radius:var(--radius);box-shadow:var(--shadow)}
+.project-insight .insight-kicker{display:inline-flex;margin-bottom:.45rem;padding:.12rem .5rem;border-radius:999px;background:#0d2137;border:1px solid #1f4b6e;color:#79b8ff;font-size:.72rem;font-weight:700;letter-spacing:.08em}
+.project-insight h2{font-size:1.15rem;margin-bottom:.45rem}
+.project-insight p{color:var(--text-muted);font-size:.96rem;line-height:1.75}
 .trend-chart{margin:2rem 0;padding:1.5rem;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius)}
 .trend-chart h2{font-size:1.2rem;margin-bottom:1rem;color:var(--text-muted)}
 .chart-container{position:relative;height:300px}
 .footer{border-top:1px solid var(--border);padding:1.25rem;text-align:center;font-size:.82rem;color:var(--text-muted);background:var(--bg-card)}
-@media(max-width:640px){.navbar{padding:0 1rem;gap:.75rem}.hero h1{font-size:1.5rem}.repo-card{flex-direction:column;gap:.5rem}.repo-rank{text-align:left}.repo-stats{gap:.75rem}.repo-stats .stat-item{min-width:80px;padding:.75rem}}
+@media(max-width:760px){.wechat-promo{grid-template-columns:1fr}.wechat-promo-img{max-width:520px;margin:0 auto}.wechat-promo-list,.wechat-promo-detail{grid-template-columns:1fr}}
+@media(max-width:640px){.navbar{padding:0 1rem;gap:.75rem}.hero h1{font-size:1.5rem}.repo-card{flex-direction:column;gap:.5rem}.repo-rank{text-align:left}.repo-stats{gap:.75rem}.repo-stats .stat-item{min-width:80px;padding:.75rem}.wechat-promo{padding:1rem}.wechat-promo h2{font-size:1.05rem}}
 `;
