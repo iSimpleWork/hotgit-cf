@@ -834,6 +834,7 @@ console.log(YELLOW('\nSuite 4: Worker Source Validation'));
   assertContains('worker: /api/repos route',         src, "'/api/repos'");
   assertContains('worker: /api/stats route',         src, "'/api/stats'");
   assertContains('worker: /api/crawl route',         src, "'/api/crawl'");
+  assertContains('worker: backfill route',           src, "'/backfillinsights'");
   assertContains('worker: D1 batch insert',          src, 'db.batch');
   assertContains('worker: cron comment 20:00 UTC',   src, '20:00 UTC');
   assertContains('worker: todayCST function',        src, 'function todayCST');
@@ -853,7 +854,10 @@ console.log(YELLOW('\nSuite 4: Worker Source Validation'));
   assertContains('worker: homepage meta fetcher',    src, 'async function fetchHomepageMeta');
   assertContains('worker: project insight enrichment', src, 'async function enrichProjectInsights');
   assertContains('worker: project insight saved field', src, 'project_insight');
-  assertContains('worker: detail uses saved insight', src, 'const projectInsight = repo.project_insight ||');
+  assertContains('worker: backfill missing query',   src, 'async function getReposMissingProjectInsights');
+  assertContains('worker: backfill update query',    src, 'async function updateRepoProjectInsight');
+  assertContains('worker: backfill page',            src, 'async function pageBackfillInsights');
+  assertContains('worker: detail uses saved insight', src, "repo.project_insight || buildProjectInsight(repo, history, '', '')");
   assertContains('worker: project insight builder',  src, 'function buildProjectInsight');
   assertContains('worker: project insight section',  src, 'class="project-insight"');
   assertContains('worker: project insight heading',  src, '为什么值得关注');
@@ -864,6 +868,7 @@ console.log(YELLOW('\nSuite 4: Worker Source Validation'));
   assertContains('worker: related internal intro',   src, '搜索引擎和读者发现更多相关开源内容');
   assertContains('worker: r id canonical redirect',  src, 'Response.redirect');
   assertContains('worker: robots disallows api',     src, 'Disallow: /api/');
+  assertContains('worker: robots disallows backfill', src, 'Disallow: /backfillinsights');
   assertContains('worker: sitemap lastmod',          src, '<lastmod>');
   assertContains('worker: trending parser',          src, 'function parseTrendingRepoNames');
   assertContains('worker: daily fetch uses potential pool', src, "fn: () => fetchPotentialDailyRepos");
@@ -988,6 +993,7 @@ console.log(YELLOW('\nSuite 6: Star Increment Calculation'));
   assertContains('migration 5: project_insight column', sql, 'project_insight');
   assertContains('migration 5: alter repos table', sql, 'ALTER TABLE repos');
 }
+
 
 // ── Suite 5: GitHub Actions 配置校验 ───────────────────────────────
 console.log(YELLOW('\nSuite 5: CI/CD Configuration'));

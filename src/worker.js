@@ -7,6 +7,7 @@
  *     GET  /              → 首页 HTML
  *     GET  /repos         → 榜单列表页 HTML
  *     GET  /forceupdate   → 立即同步爬取并展示结果
+ *     GET  /backfillinsights → 补全存量项目观察总结
  *     GET  /api/repos     → JSON API（分页/筛选）
  *     GET  /api/stats     → 统计摘要
  *     GET  /api/dates     → 所有爬取日期
@@ -71,6 +72,7 @@ export default {
     if (path === '/')             return pageIndex(env);
     if (path === '/repos')        return pageRepos(request, env);
     if (path === '/forceupdate')  return pageForceUpdate(env);
+    if (path === '/backfillinsights') return pageBackfillInsights(request, env);
     
     // SEO 静态化路由 /repo/owner/repo 或 /repo/owner%2Frepo
     const repoMatch = path.match(/^\/repo\/([^\/]+)\/([^\/]+)$/);
@@ -804,6 +806,33 @@ async function getTopicRelatedRepos(db, topics, excludeFullName, crawlDate, limi
   return rows.results;
 }
 
+async function getReposMissingProjectInsights(db, limit = 20) {
+  const rows = await db.prepare(
+    `SELECT *
+     FROM repos
+     WHERE id IN (
+       SELECT MAX(id)
+       FROM repos
+       WHERE COALESCE(project_insight, '') = ''
+       GROUP BY full_name
+     )
+     ORDER BY crawl_date DESC, stars DESC
+     LIMIT ?`
+  ).bind(limit).all();
+  return rows.results;
+}
+
+async function updateRepoProjectInsight(db, repo) {
+  await db.prepare(
+    `UPDATE repos
+     SET project_insight = ?
+     WHERE full_name = ?`
+  ).bind(
+    repo.project_insight || '',
+    repo.full_name
+  ).run();
+}
+
 async function getRepoHistory(db, fullName, days = 30) {
   try {
     const rows = await db.prepare(
@@ -1406,6 +1435,63 @@ async function pageForceUpdate(env) {
   }));
 }
 
+async function pageBackfillInsights(request, env) {
+  const startTime = Date.now();
+  const q = new URL(request.url).searchParams;
+  const limit = Math.min(Math.max(parseIntParam(q.get('limit'), 20), 1), 100);
+  const repos = await getReposMissingProjectInsights(env.DB, limit);
+  const insightCache = new Map();
+  const results = [];
+
+  for (const repo of repos) {
+    const t0 = Date.now();
+    try {
+      await enrichProjectInsights(env.DB, [repo], env.GITHUB_TOKEN || '', repo.crawl_date, insightCache);
+      await updateRepoProjectInsight(env.DB, repo);
+      results.push({
+        full_name: repo.full_name,
+        ok: true,
+        hasInsight: Boolean(repo.project_insight),
+        ms: Date.now() - t0,
+      });
+    } catch (e) {
+      results.push({ full_name: repo.full_name, ok: false, error: e.message, ms: Date.now() - t0 });
+    }
+  }
+
+  const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+  const okCount = results.filter(r => r.ok).length;
+  const rows = results.map(r => `
+    <tr class="${r.ok ? '' : 'row-error'}">
+      <td>${escHtml(r.full_name)}</td>
+      <td>${r.ok ? '<span class="badge-ok">成功</span>' : '<span class="badge-err">失败</span>'}</td>
+      <td>${r.ok ? (r.hasInsight ? '已生成' : '未生成') : '—'}</td>
+      <td>${(r.ms / 1000).toFixed(1)}s</td>
+      <td>${r.ok ? '—' : escHtml(r.error || '')}</td>
+    </tr>`).join('');
+
+  const body = `
+  <div class="repos-header">
+    <h1>🧩 补全存量项目详情</h1>
+    <p class="data-date">本次最多处理 ${limit} 个缺少项目观察的存量项目，临时抓取 README 与主页摘要用于生成总结</p>
+  </div>
+  <p class="result-summary ${okCount === results.length ? 'ok' : 'warn'}">已处理 ${results.length} 个项目，成功 ${okCount} 个，耗时 ${elapsed}s。</p>
+  ${results.length ? `<table class="result-table">
+    <thead><tr><th>项目</th><th>状态</th><th>项目观察</th><th>耗时</th><th>错误</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>` : '<div class="empty-state"><p>暂无需要补全的存量项目。</p></div>'}
+  <div class="result-actions">
+    <a class="btn btn-primary" href="/backfillinsights?limit=${limit}">继续补全下一批</a>
+    <a class="btn btn-ghost" href="/">返回首页</a>
+  </div>`;
+
+  return html(baseLayout('补全存量项目详情 — HotGit', body, {
+    description: '补全 HotGit 存量项目的项目观察总结，仅供站点维护使用。',
+    canonicalUrl: siteUrl(env, '/backfillinsights'),
+    robots: 'noindex,nofollow'
+  }));
+}
+
 async function pageRepoDetail(env, owner, name) {
   const fullName = `${owner}/${name}`;
   const repo = await getRepoByName(env.DB, fullName);
@@ -1678,6 +1764,7 @@ function pageRobots(env) {
 Allow: /
 Disallow: /api/
 Disallow: /forceupdate
+Disallow: /backfillinsights
 
 Sitemap: https://${domain}/sitemap.xml
 `;
