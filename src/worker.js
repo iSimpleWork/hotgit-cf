@@ -1089,12 +1089,18 @@ function wechatPromoBlock(variant = 'default') {
   const titleId = `wechat-promo-title-${variant}`;
   return `
   <section class="wechat-promo wechat-promo-${variant}" aria-labelledby="${titleId}">
-    <div class="wechat-promo-copy">
-      <p class="promo-eyebrow">公众号同步更新</p>
-      <h2 id="${titleId}">关注 HotGit，第一时间发现热门开源项目</h2>
-      <p>每日热门项目资讯、增长趋势观察和深度解读会同步到公众号，适合通勤、碎片时间快速浏览。</p>
-    </div>
-    <img class="wechat-promo-img" src="/static/img/wechat-promo.png" alt="${WECHAT_PROMO_ALT}" width="132" height="132" loading="lazy" decoding="async"/>
+    <table class="wechat-promo-table" role="presentation">
+      <tr>
+        <td class="wechat-promo-copy">
+          <p class="promo-eyebrow">公众号同步更新</p>
+          <h2 id="${titleId}">关注 HotGit，第一时间发现热门开源项目</h2>
+          <p>每日热门项目资讯、增长趋势观察和深度解读会同步到公众号，适合通勤、碎片时间快速浏览。</p>
+        </td>
+        <td class="wechat-promo-media">
+          <img class="wechat-promo-img" src="/static/img/wechat-promo.png" alt="${WECHAT_PROMO_ALT}" width="132" height="132" loading="lazy" decoding="async"/>
+        </td>
+      </tr>
+    </table>
   </section>`;
 }
 
@@ -1809,15 +1815,17 @@ a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 .hero-date.warning{color:#e3b341}
 .crawl-status{display:block;margin-top:.75rem;font-size:.9rem;min-height:1.2em}
 .crawl-status.info{color:#58a6ff}.crawl-status.success{color:#3fb950}.crawl-status.error{color:#f85149}
-.wechat-promo{display:grid;grid-template-columns:minmax(0,1fr) 112px;grid-template-areas:"copy image";gap:.85rem;align-items:center;max-width:560px;margin:2.5rem auto 0;padding:.75rem .85rem;background:linear-gradient(135deg,#111820 0%,#161b22 100%);border:1px solid var(--border);border-radius:12px;box-shadow:none;overflow:hidden}
-.wechat-promo-copy{grid-area:copy;min-width:0}
+.wechat-promo{max-width:600px;margin:2.5rem auto 0;padding:.78rem .9rem;background:linear-gradient(135deg,#111820 0%,#161b22 100%);border:1px solid var(--border);border-radius:12px;box-shadow:none;overflow:hidden}
+.wechat-promo-table{width:100%;border-collapse:collapse;table-layout:fixed}
+.wechat-promo-copy{width:auto;min-width:0;padding:0 .9rem 0 0;vertical-align:middle}
+.wechat-promo-media{width:132px;padding:0;vertical-align:middle;text-align:right}
 .wechat-promo-home{margin-top:2.5rem}
 .wechat-promo-list{margin-top:2rem}
 .wechat-promo-detail{margin-top:2.25rem}
 .promo-eyebrow{display:inline-flex;margin-bottom:.28rem;padding:.1rem .48rem;border-radius:999px;background:#2386361a;border:1px solid #2ea0434d;color:#7ee787;font-size:.68rem;font-weight:700;letter-spacing:.08em}
 .wechat-promo h2{font-size:.96rem;margin-bottom:.24rem}
 .wechat-promo p{color:var(--text-muted);font-size:.8rem;line-height:1.5}
-.wechat-promo-img{grid-area:image;width:100%;max-width:112px;height:auto;justify-self:end;border-radius:8px;background:#07c160;box-shadow:0 5px 14px rgba(0,0,0,.16)}
+.wechat-promo-img{display:block;width:132px;min-width:132px;max-width:132px;height:132px;border-radius:8px;background:#07c160;box-shadow:0 5px 14px rgba(0,0,0,.16)}
 .stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:1rem;margin:2rem 0}
 .stat-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:1.5rem 1.25rem;text-align:center;transition:transform .15s,background .15s,border-color .15s;text-decoration:none!important;color:var(--text)!important}
 .stat-card:hover{background:var(--bg-card-h);transform:translateY(-2px);border-color:var(--accent)}
@@ -1898,6 +1906,6 @@ a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 .trend-chart h2{font-size:1.2rem;margin-bottom:1rem;color:var(--text-muted)}
 .chart-container{position:relative;height:300px}
 .footer{border-top:1px solid var(--border);padding:1.25rem;text-align:center;font-size:.82rem;color:var(--text-muted);background:var(--bg-card)}
-@media(max-width:420px){.wechat-promo{grid-template-columns:1fr;grid-template-areas:"copy" "image";max-width:360px}.wechat-promo-img{max-width:120px;margin:0 auto;justify-self:center}}
+@media(max-width:420px){.wechat-promo{padding:.7rem}.wechat-promo-copy{padding-right:.65rem}.wechat-promo-media{width:112px}.wechat-promo-img{width:112px;min-width:112px;max-width:112px;height:112px}.wechat-promo h2{font-size:.9rem}.wechat-promo p{font-size:.76rem;line-height:1.45}.promo-eyebrow{font-size:.62rem}}
 @media(max-width:640px){.navbar{padding:0 1rem;gap:.75rem}.hero h1{font-size:1.5rem}.repo-card{flex-direction:column;gap:.5rem}.repo-rank{text-align:left}.repo-stats{gap:.75rem}.repo-stats .stat-item{min-width:80px;padding:.75rem}.wechat-promo{padding:.85rem}.wechat-promo h2{font-size:.98rem}}
 `;
