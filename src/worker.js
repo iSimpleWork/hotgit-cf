@@ -22,7 +22,7 @@ const USER_AGENT   = 'hotgit-cf/1.0 (https://github.com/hotgit)';
 const DEFAULT_DOMAIN = 'hotgit-cf.linkai.workers.dev';
 const SITE_NAME = 'HotGit';
 const SITE_DESCRIPTION = 'HotGit 每日追踪 GitHub 热门仓库、Star 增长趋势和开源项目潜力榜，帮开发者及时发现值得关注的开源项目。';
-const WECHAT_PROMO_ALT = 'HotGit 公众号二维码，扫码关注获取最新热门项目资讯及深度解读';
+const WECHAT_PROMO_ALT = '项目值得看 公众号二维码，扫码关注获取最新热门项目资讯及深度解读';
 
 let DOMAIN = DEFAULT_DOMAIN;
 
@@ -1093,7 +1093,7 @@ function wechatPromoBlock(variant = 'default') {
       <tr>
         <td class="wechat-promo-copy">
           <p class="promo-eyebrow">公众号同步更新</p>
-          <h2 id="${titleId}">关注 HotGit，第一时间发现热门开源项目</h2>
+          <h2 id="${titleId}">搜索关注【项目值得看】公众号，第一时间发现热门开源项目</h2>
           <p>每日热门项目资讯、增长趋势观察和深度解读会同步到公众号，适合通勤、碎片时间快速浏览。</p>
         </td>
         <td class="wechat-promo-media">
