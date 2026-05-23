@@ -309,6 +309,19 @@ class MockStatement {
       return { results:[{ n: this._filter(p).length }], success:true };
     }
     if (/GROUP BY category/i.test(sql)) {
+      if (/JOIN \(/i.test(sql)) {
+        const latestByCategory = {};
+        for (const r of db._repos) {
+          if (!latestByCategory[r.category] || r.crawl_date > latestByCategory[r.category]) {
+            latestByCategory[r.category] = r.crawl_date;
+          }
+        }
+        const bycat = {};
+        db._repos.forEach(r => {
+          if (r.crawl_date === latestByCategory[r.category]) bycat[r.category] = (bycat[r.category] || 0) + 1;
+        });
+        return { results:Object.entries(bycat).map(([category,cnt])=>({category,cnt})), success:true };
+      }
       const bycat = {};
       db._repos.filter(r=>r.crawl_date===p[0]).forEach(r=>{ bycat[r.category]=(bycat[r.category]||0)+1; });
       return { results:Object.entries(bycat).map(([category,cnt])=>({category,cnt})), success:true };
@@ -902,6 +915,11 @@ console.log(YELLOW('\nSuite 4: Worker Source Validation'));
   assertContains('worker: cron comment 20:00 UTC',   src, '20:00 UTC');
   assertContains('worker: todayCST function',        src, 'function todayCST');
   assertContains('worker: CST offset +8h',           src, '8 * 3600_000');
+  assertContains('worker: category latest date support', src, 'SELECT MAX(crawl_date) AS d FROM repos WHERE category = ?');
+  assertContains('worker: stats use per-category latest', src, 'SELECT category, MAX(crawl_date) AS crawl_date');
+  assertContains('worker: repos page uses category date', src, "await getLatestDate(env.DB, category)");
+  assertContains('worker: category dates support', src, 'SELECT DISTINCT crawl_date FROM repos WHERE category = ?');
+  assertContains('worker: tabs do not pin unavailable date', src, 'href="/repos?category=${cat}"');
   assertContains('worker: analytics snippet const',  src, 'const ANALYTICS_HEAD_SNIPPET');
   assertContains('worker: Adsense account meta',     src, 'ca-pub-0790471852661955');
   assertContains('worker: gtag id',                  src, 'G-RJDEV8XM5Y');
@@ -946,6 +964,8 @@ console.log(YELLOW('\nSuite 4: Worker Source Validation'));
   assertContains('worker: sitemap lastmod',          src, '<lastmod>');
   assertContains('worker: trending parser',          src, 'function parseTrendingRepoNames');
   assertContains('worker: daily fetch uses potential pool', src, "fn: () => fetchPotentialDailyRepos");
+  assertContains('worker: forceupdate prioritizes daily', src, "name: 'star_daily',   label: CATEGORY_LABELS.star_daily");
+  assertContains('worker: forceupdate avoids insight batch', src, '手动更新优先保证增量榜可用');
   assertContains('worker: potential daily scorer',   src, 'function scorePotentialDailyRepo');
   assertContains('worker: potential daily comparator', src, 'function comparePotentialDailyRepo');
   assertContains('worker: increment uses history table', src, 'LEFT JOIN repo_stars_history h');

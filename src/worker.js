@@ -618,9 +618,11 @@ async function logCrawl(db, crawlDate, category, count, status, message) {
   ).bind(crawlDate, category, count, status, message).run();
 }
 
-async function getLatestDate(db) {
+async function getLatestDate(db, category = '') {
   try {
-    const row = await db.prepare('SELECT MAX(crawl_date) AS d FROM repos').first();
+    const row = category
+      ? await db.prepare('SELECT MAX(crawl_date) AS d FROM repos WHERE category = ?').bind(category).first()
+      : await db.prepare('SELECT MAX(crawl_date) AS d FROM repos').first();
     return row?.d || null;
   } catch (e) {
     console.error('[getLatestDate] error:', e.message);
@@ -632,17 +634,26 @@ async function getStats(db) {
   const date = await getLatestDate(db);
   if (!date) return { date: null, categories: {} };
   const rows = await db.prepare(
-    'SELECT category, COUNT(*) AS cnt FROM repos WHERE crawl_date = ? GROUP BY category'
-  ).bind(date).all();
+    `SELECT r.category, COUNT(*) AS cnt
+     FROM repos r
+     JOIN (
+       SELECT category, MAX(crawl_date) AS crawl_date
+       FROM repos
+       GROUP BY category
+     ) latest
+       ON latest.category = r.category
+      AND latest.crawl_date = r.crawl_date
+     GROUP BY r.category`
+  ).all();
   const categories = {};
   for (const r of rows.results) categories[r.category] = r.cnt;
   return { date, categories };
 }
 
-async function getCrawlDates(db) {
-  const rows = await db.prepare(
-    'SELECT DISTINCT crawl_date FROM repos ORDER BY crawl_date DESC LIMIT 30'
-  ).all();
+async function getCrawlDates(db, category = '') {
+  const rows = category
+    ? await db.prepare('SELECT DISTINCT crawl_date FROM repos WHERE category = ? ORDER BY crawl_date DESC LIMIT 30').bind(category).all()
+    : await db.prepare('SELECT DISTINCT crawl_date FROM repos ORDER BY crawl_date DESC LIMIT 30').all();
   return rows.results.map(r => r.crawl_date);
 }
 
@@ -1282,7 +1293,7 @@ async function pageRepos(request, env) {
   const perPage   = parseIntParam(q.get('per_page'), 20);
   const lang      = q.get('lang')   || '';
   const search    = q.get('search') || '';
-  const crawlDate = q.get('date')   || await getLatestDate(env.DB);
+  const crawlDate = q.get('date')   || await getLatestDate(env.DB, category);
   const canonicalParams = new URLSearchParams({ category });
   if (crawlDate) canonicalParams.set('date', crawlDate);
   const canonicalUrl = siteUrl(env, `/repos?${canonicalParams.toString()}`);
@@ -1291,11 +1302,11 @@ async function pageRepos(request, env) {
 
   const result  = await queryRepos(env.DB, { category, crawlDate, page, perPage, lang, search });
   const langs   = await getLanguages(env.DB, category, crawlDate);
-  const dates   = await getCrawlDates(env.DB);
+  const dates   = await getCrawlDates(env.DB, category);
 
   // Tab 栏
   const tabs = Object.entries(CATEGORY_LABELS).map(([cat, lbl]) =>
-    `<a class="tab${cat === category ? ' active' : ''}" href="/repos?category=${cat}&date=${crawlDate||''}">${lbl}</a>`
+    `<a class="tab${cat === category ? ' active' : ''}" href="/repos?category=${cat}">${lbl}</a>`
   ).join('');
 
   // 筛选栏
@@ -1431,14 +1442,14 @@ async function pageForceUpdate(env) {
   let hasError = false;
 
   // 逐个分类爬取，记录结果（不改变按天记录的逻辑，saveRepos 会覆盖今天同类数据）
+  // 手动更新优先保证增量榜可用，并避免批量抓 README/主页导致超时或触发限流。
   const tasks = [
-    { name: 'top_stars',    label: CATEGORY_LABELS.top_stars,    fn: () => githubSearch('stars:>1000',           'stars', env.GITHUB_TOKEN || '') },
-    { name: 'top_forks',    label: CATEGORY_LABELS.top_forks,    fn: () => githubSearch('forks:>500',            'forks', env.GITHUB_TOKEN || '') },
     { name: 'star_daily',   label: CATEGORY_LABELS.star_daily,   fn: () => fetchPotentialDailyRepos(env.DB, env.GITHUB_TOKEN || '') },
     { name: 'star_weekly',  label: CATEGORY_LABELS.star_weekly,  fn: () => githubSearch('stars:>100',            'stars', env.GITHUB_TOKEN || '') },
     { name: 'star_monthly', label: CATEGORY_LABELS.star_monthly, fn: () => githubSearch('stars:>100',             'stars', env.GITHUB_TOKEN || '') },
+    { name: 'top_stars',    label: CATEGORY_LABELS.top_stars,    fn: () => githubSearch('stars:>1000',           'stars', env.GITHUB_TOKEN || '') },
+    { name: 'top_forks',    label: CATEGORY_LABELS.top_forks,    fn: () => githubSearch('forks:>500',            'forks', env.GITHUB_TOKEN || '') },
   ];
-  const insightCache = new Map();
 
   for (const task of tasks) {
     const t0 = Date.now();
@@ -1447,7 +1458,6 @@ async function pageForceUpdate(env) {
       const repos = task.name === 'star_daily'
         ? items
         : items.slice(0, 100).map((r, i) => fmtRepo(r, task.name, i + 1));
-      await enrichProjectInsights(env.DB, repos, env.GITHUB_TOKEN || '', today, insightCache);
       await translateAndSaveRepos(env.DB, repos);
       await saveRepos(env.DB, repos, today);
       await logCrawl(env.DB, today, task.name, repos.length, 'ok', '');
