@@ -852,7 +852,7 @@ console.log(YELLOW('\nSuite 4: Worker Source Validation'));
   assertContains('worker: wechat promo copy',        src, '关注 HotGit，第一时间发现热门开源项目');
   assertContains('worker: wechat promo table layout', src, 'class="wechat-promo-table"');
   assertContains('worker: wechat promo media cell',   src, 'class="wechat-promo-media"');
-  assertContains('worker: wechat promo fixed image width', src, 'width:132px;min-width:132px;max-width:132px;height:132px');
+  assertContains('worker: wechat promo fixed image height', src, 'width:auto;height:132px;max-width:none');
   assertContains('worker: github readme fetcher',    src, 'async function githubReadmeText');
   assertContains('worker: homepage meta fetcher',    src, 'async function fetchHomepageMeta');
   assertContains('worker: project insight enrichment', src, 'async function enrichProjectInsights');
