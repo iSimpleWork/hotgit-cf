@@ -1636,7 +1636,7 @@ async function pageRepoDetail(env, owner, name) {
     : '';
 
   const topicRelatedHtml = topicRelated.length
-    ? `<section class="related-repos topic-related"><h2>同主题相关项目</h2><p class="related-intro">继续浏览这些主题相近的项目，帮助搜索引擎和读者发现更多相关开源内容。</p><div class="repo-list">${topicRelated.map(r => `
+    ? `<section class="related-repos topic-related"><h2>同主题相关项目</h2><p class="related-intro">如果你正在调研同类工具，可以继续看看这些项目的实现思路、社区热度和近期增长表现。</p><div class="repo-list">${topicRelated.map(r => `
       <a class="repo-card" href="/r/${r.id}">
         <div class="repo-main">
           <div class="repo-title-line"><span class="repo-name">${escHtml(r.full_name)}</span>${r.language && r.language !== 'Unknown' ? `<span class="lang-badge">${escHtml(r.language)}</span>` : ''}</div>

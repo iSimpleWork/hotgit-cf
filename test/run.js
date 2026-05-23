@@ -890,7 +890,7 @@ console.log(YELLOW('\nSuite 4: Worker Source Validation'));
   assertContains('worker: sitemap repo-level lastmod', src, 'sitemapRepo.lastmod || latestDate');
   assertContains('worker: topic related query',      src, 'async function getTopicRelatedRepos');
   assertContains('worker: topic related section',    src, '同主题相关项目');
-  assertContains('worker: related internal intro',   src, '搜索引擎和读者发现更多相关开源内容');
+  assertContains('worker: related reader intro',     src, '实现思路、社区热度和近期增长表现');
   assertContains('worker: r id canonical redirect',  src, 'Response.redirect');
   assertContains('worker: robots disallows api',     src, 'Disallow: /api/');
   assertContains('worker: robots disallows backfill', src, 'Disallow: /backfillinsights');
