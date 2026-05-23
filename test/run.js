@@ -966,6 +966,8 @@ console.log(YELLOW('\nSuite 4: Worker Source Validation'));
   assertContains('worker: daily fetch uses potential pool', src, "fn: () => fetchPotentialDailyRepos");
   assertContains('worker: forceupdate prioritizes daily', src, "name: 'star_daily',   label: CATEGORY_LABELS.star_daily");
   assertContains('worker: forceupdate avoids insight batch', src, '手动更新优先保证增量榜可用');
+  assertContains('worker: scheduled crawl prioritizes daily', src, "name: 'star_daily',   fn: () => dailyHistoryPool.slice(0, 100)");
+  assertContains('worker: scheduled crawl avoids insight batch', src, '定时任务优先保证榜单数据落库');
   assertContains('worker: potential daily scorer',   src, 'function scorePotentialDailyRepo');
   assertContains('worker: potential daily comparator', src, 'function comparePotentialDailyRepo');
   assertContains('worker: increment uses history table', src, 'LEFT JOIN repo_stars_history h');

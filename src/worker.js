@@ -431,11 +431,11 @@ function sinceDate(days) {
 /** 爬取所有榜单 */
 async function fetchAll(db, githubToken, prefetchedDailyRepos = null) {
   const tasks = [
-    { name: 'top_stars',    fn: () => githubSearch('stars:>1000',           'stars', githubToken) },
-    { name: 'top_forks',    fn: () => githubSearch('forks:>500',            'forks', githubToken) },
     { name: 'star_daily',   fn: () => prefetchedDailyRepos || fetchPotentialDailyRepos(db, githubToken) },
     { name: 'star_weekly',  fn: () => githubSearch('stars:>100',             'stars', githubToken) },
     { name: 'star_monthly', fn: () => githubSearch('stars:>100',              'stars', githubToken) },
+    { name: 'top_stars',    fn: () => githubSearch('stars:>1000',           'stars', githubToken) },
+    { name: 'top_forks',    fn: () => githubSearch('forks:>500',            'forks', githubToken) },
   ];
 
   const result = {};
@@ -479,38 +479,46 @@ async function runCrawl(env) {
   const githubToken = env.GITHUB_TOKEN || '';
 
   let dailyHistoryPool = [];
-  let allRepos;
   try {
     dailyHistoryPool = await fetchPotentialDailyRepos(env.DB, githubToken, 300);
-    allRepos = await fetchAll(env.DB, githubToken, dailyHistoryPool.slice(0, 100));
   } catch (e) {
-    console.error('[crawl] fetchAll error:', e.message);
-    await logCrawl(env.DB, today, 'ALL', 0, 'error', e.message);
-    return;
+    console.error('[crawl] daily history pool error:', e.message);
+    await logCrawl(env.DB, today, 'star_daily', 0, 'error', e.message);
   }
 
-  // 先保存所有 repo 的历史数据（用于计算增量）
-  const allReposFlat = [...Object.values(allRepos).flat(), ...dailyHistoryPool];
+  // 先保存候选池历史数据（用于后续日增、周增、月增计算）
   try {
-    await saveStarsHistory(env.DB, allReposFlat, today);
+    await saveStarsHistory(env.DB, dailyHistoryPool, today);
     console.log('[crawl] history saved');
   } catch (e) {
     console.error('[crawl] save history error:', e.message);
   }
 
-  const insightCache = new Map();
-  for (const [category, repos] of Object.entries(allRepos)) {
+  // 定时任务优先保证榜单数据落库，不在主流程批量抓 README/主页，避免超时或触发限流。
+  const tasks = [
+    { name: 'star_daily',   fn: () => dailyHistoryPool.slice(0, 100) },
+    { name: 'star_weekly',  fn: () => githubSearch('stars:>100',   'stars', githubToken) },
+    { name: 'star_monthly', fn: () => githubSearch('stars:>100',   'stars', githubToken) },
+    { name: 'top_stars',    fn: () => githubSearch('stars:>1000',  'stars', githubToken) },
+    { name: 'top_forks',    fn: () => githubSearch('forks:>500',   'forks', githubToken) },
+  ];
+
+  for (const task of tasks) {
     try {
-      await enrichProjectInsights(env.DB, repos, githubToken, today, insightCache);
-      // 先翻译并保存
+      const items = await task.fn();
+      const repos = task.name === 'star_daily'
+        ? items
+        : items.slice(0, 100).map((r, i) => fmtRepo(r, task.name, i + 1));
+      await saveStarsHistory(env.DB, repos, today);
       await translateAndSaveRepos(env.DB, repos);
       await saveRepos(env.DB, repos, today);
-      await logCrawl(env.DB, today, category, repos.length, 'ok', '');
-      console.log(`[crawl] ${category}: ${repos.length} saved`);
+      await logCrawl(env.DB, today, task.name, repos.length, 'ok', '');
+      console.log(`[crawl] ${task.name}: ${repos.length} saved`);
     } catch (e) {
-      console.error(`[crawl] save ${category} error:`, e.message);
-      await logCrawl(env.DB, today, category, 0, 'error', e.message);
+      console.error(`[crawl] ${task.name} error:`, e.message);
+      await logCrawl(env.DB, today, task.name, 0, 'error', e.message);
     }
+    await new Promise(r => setTimeout(r, 1000));
   }
   console.log('[crawl] done');
 }
