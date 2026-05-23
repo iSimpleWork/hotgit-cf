@@ -1105,7 +1105,7 @@ function wechatPromoBlock(variant = 'default') {
 }
 
 function buildProjectInsight(repo, history = [], readmeText = '', homepageMeta = '') {
-  const topics = (repo.topics || '').split(',').filter(Boolean).slice(0, 4);
+  const topics = (repo.topics || '').split(',').map(t => t.trim()).filter(Boolean).slice(0, 6);
   const sourceText = `${repo.description || ''} ${readmeText || ''} ${homepageMeta || ''}`.toLowerCase();
   const latest = history[history.length - 1];
   const previous = history.length > 1 ? history[history.length - 2] : null;
@@ -1114,11 +1114,23 @@ function buildProjectInsight(repo, history = [], readmeText = '', homepageMeta =
   const focus = inferProjectFocus(repo, sourceText, topics);
   const audience = inferProjectAudience(repo, sourceText, topics);
   const heat = inferProjectHeat(repo, dailyGain);
-  const topicText = topics.length ? `，覆盖 ${topics.slice(0, 2).join('、')}` : '';
-  const homepageHint = homepageMeta ? '结合 README 与项目主页看，' : '';
+  const language = repo.language && repo.language !== 'Unknown' ? repo.language : '多语言';
+  const topicText = topics.length ? `，相关标签包括 ${topics.slice(0, 4).join('、')}` : '';
+  const sourceHint = [
+    readmeText ? 'README' : '',
+    homepageMeta ? '项目主页' : '',
+  ].filter(Boolean).join(' 与 ');
+  const sourceTextHint = sourceHint ? `结合 ${sourceHint} 信息看，` : '从项目描述和公开元数据看，';
+  const descriptionHint = repo.description ? `项目描述强调“${trimInsightFragment(repo.description, 72)}”，` : '';
+  const activityHint = repo.pushed_at ? `最近一次代码更新在 ${repo.pushed_at.slice(0, 10)}，` : '';
+  const growthHint = dailyGain !== null
+    ? `本轮统计相对历史基准新增约 ${fmtNum(Math.max(dailyGain, 0))} Star，`
+    : '当前缺少完整历史基准，';
 
   return trimInsight(
-    `${homepageHint}${repo.full_name} 值得关注在于${focus}${topicText}。适合${audience}。最近变热来自${heat}，建议持续观察 Star 增长和社区反馈。`
+    `${sourceTextHint}${repo.full_name} 是一个围绕${focus}展开的开源项目${topicText}，主要使用 ${language}。${descriptionHint}它的价值不只是提供一个可运行的代码仓库，更在于把具体场景中的高频问题沉淀成可复用的工具、框架或实践路径，方便团队在评估新技术时快速判断是否值得试用。` +
+    `这个项目适合${audience}，尤其适合正在寻找同类替代方案、希望缩短调研周期，或想观察新兴开源方向的人。用于生产前，应优先检查许可证、维护者响应速度、版本节奏和生态兼容性。最近变热主要来自${heat}；${activityHint}${growthHint}如果后续 Star、Fork、Issue 讨论和提交频率继续活跃，就值得进一步跟踪。` +
+    `建议重点看 README 的使用示例、安装成本、核心 API 是否清晰，以及项目主页是否给出真实案例。整体来看，它适合作为技术选型、竞品调研或开源趋势分析的候选样本。`
   );
 }
 
@@ -1155,10 +1167,16 @@ function inferProjectHeat(repo, dailyGain) {
   return `${gainText}${updateText}${fmtNum(stars)} Star 与 ${fmtNum(forks)} Fork 带来的关注度积累`;
 }
 
+function trimInsightFragment(text, maxLen = 72) {
+  const compact = String(text || '').replace(/\s+/g, ' ').trim();
+  if (compact.length <= maxLen) return compact;
+  return compact.slice(0, maxLen - 1).replace(/[，。；、\s]+$/u, '') + '…';
+}
+
 function trimInsight(text) {
   const compact = String(text || '').replace(/\s+/g, ' ').trim();
-  if (compact.length <= 150) return compact;
-  return compact.slice(0, 147).replace(/[，。；、\s]+$/u, '') + '。';
+  if (compact.length <= 500) return compact;
+  return compact.slice(0, 497).replace(/[，。；、\s]+$/u, '') + '。';
 }
 
 async function pageIndex(env) {
