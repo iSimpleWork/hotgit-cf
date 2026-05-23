@@ -55,6 +55,7 @@ function fmtRepo(repo, category, rank) {
     topics:      (repo.topics || []).join(','),
     homepage:    repo.homepage || '',
     project_insight: repo.project_insight || '',
+    project_insight_updated_at: repo.project_insight_updated_at || '',
   };
 }
 
@@ -146,21 +147,26 @@ function buildProjectInsight(repo, history = [], readmeText = '', homepageMeta =
   const heat = inferProjectHeat(repo, dailyGain);
   const language = repo.language && repo.language !== 'Unknown' ? repo.language : '多语言';
   const topicText = topics.length ? `，相关标签包括 ${topics.slice(0, 4).join('、')}` : '';
-  const sourceHint = [
-    readmeText ? 'README' : '',
-    homepageMeta ? '项目主页' : '',
-  ].filter(Boolean).join(' 与 ');
-  const sourceTextHint = sourceHint ? `结合 ${sourceHint} 信息看，` : '从项目描述和公开元数据看，';
-  const descriptionHint = repo.description ? `项目描述强调“${trimInsightFragment(repo.description, 72)}”，` : '';
+  const sourceHint = describeInsightSources(readmeText, homepageMeta);
+  const descriptionHint = repo.description ? `项目描述里最直接的信息是：“${trimInsightFragment(repo.description, 110)}”。` : '';
+  const readmeHint = readmeText ? `README 里能看到它围绕使用方式、核心能力或落地场景做了说明，这比单纯看 Star 数更有参考价值。` : '';
+  const homepageHint = homepageMeta ? `项目主页补充了定位或产品化表达，可以帮助判断它是不是只停留在代码仓库，还是已经有更清晰的使用入口。` : '';
   const activityHint = repo.pushed_at ? `最近一次代码更新在 ${repo.pushed_at.slice(0, 10)}，` : '';
   const growthHint = dailyGain !== null
-    ? `本轮统计相对历史基准新增约 ${fmtNum(Math.max(dailyGain, 0))} Star，`
-    : '当前缺少完整历史基准，';
+    ? `这次统计相对历史基准新增约 ${fmtNum(Math.max(dailyGain, 0))} Star，`
+    : '当前缺少完整历史基准，后续需要继续看增量是否稳定。';
   return trimInsight(
-    `${sourceTextHint}${repo.full_name} 是一个围绕${focus}展开的开源项目${topicText}，主要使用 ${language}。${descriptionHint}它的价值不只是提供一个可运行的代码仓库，更在于把具体场景中的高频问题沉淀成可复用的工具、框架或实践路径，方便团队在评估新技术时快速判断是否值得试用。` +
-    `这个项目适合${audience}，尤其适合正在寻找同类替代方案、希望缩短调研周期，或想观察新兴开源方向的人。用于生产前，应优先检查许可证、维护者响应速度、版本节奏和生态兼容性。最近变热主要来自${heat}；${activityHint}${growthHint}如果后续 Star、Fork、Issue 讨论和提交频率继续活跃，就值得进一步跟踪。` +
-    `建议重点看 README 的使用示例、安装成本、核心 API 是否清晰，以及项目主页是否给出真实案例。整体来看，它适合作为技术选型、竞品调研或开源趋势分析的候选样本。`
+    `${sourceHint}${repo.full_name} 值得先看的一点，是它围绕${focus}在解决问题${topicText}，主要使用 ${language}。${descriptionHint}${readmeHint}${homepageHint}` +
+    `我会把它放进观察清单，不是因为 Star 数本身，而是因为它的方向和最近热度有交集：${heat}；${activityHint}${growthHint}如果后面几天还能继续增长，同时 Issue、PR、提交记录也比较活跃，说明它可能不只是短时间被转发了一波，而是确实踩中了开发者近期的需求。` +
+    `它更适合${audience}，尤其是正在做技术选型、找替代方案、观察新方向，或者想快速判断某类工具是否值得投入时间的人。真正要落地时，我建议先看四件事：README 的示例是不是清楚，安装和接入成本高不高，许可证是否适合自己的使用场景，维护者对问题反馈和版本发布是否稳定。整体来看，这类项目适合作为趋势观察样本，也适合在周末或碎片时间进一步读源码、看 demo、对比同类方案。`
   );
+}
+
+function describeInsightSources(readmeText, homepageMeta) {
+  if (readmeText && homepageMeta) return '结合 README 和项目主页来看，';
+  if (readmeText) return '结合 README 来看，';
+  if (homepageMeta) return '结合项目主页来看，';
+  return '从项目描述、标签和公开数据来看，';
 }
 
 function inferProjectFocus(repo, sourceText, topics) {
@@ -202,9 +208,7 @@ function trimInsightFragment(text, maxLen = 72) {
 }
 
 function trimInsight(text) {
-  const compact = String(text || '').replace(/\s+/g, ' ').trim();
-  if (compact.length <= 500) return compact;
-  return compact.slice(0, 497).replace(/[，。；、\s]+$/u, '') + '。';
+  return String(text || '').replace(/\s+/g, ' ').trim();
 }
 
 function escHtml(s) {
@@ -217,6 +221,10 @@ function fmtNum(n) {
 
 function todayCST() {
   return new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10);
+}
+
+function nowCSTDateTime() {
+  return new Date(Date.now() + 8 * 3600_000).toISOString().replace('T', ' ').slice(0, 19);
 }
 
 function sinceDate(days) {
@@ -268,7 +276,8 @@ class MockStatement {
       db._repos.push({ id: db._nextId++, crawl_date:p[0], category:p[1], rank:p[2],
         full_name:p[3], html_url:p[4], description:p[5], language:p[6],
         stars:p[7], forks:p[8], open_issues:p[9], pushed_at:p[10], topics:p[11], homepage:p[12],
-        translated_name:p[13] || '', translated_desc:p[14] || '', project_insight:p[15] || '' });
+        translated_name:p[13] || '', translated_desc:p[14] || '', project_insight:p[15] || '',
+        project_insight_updated_at:p[16] || '' });
       return { results:[], success:true };
     }
     if (/^INSERT INTO repo_stars_history/i.test(sql)) {
@@ -325,6 +334,37 @@ class MockStatement {
       });
       return { results, success: true };
     }
+    if (/^UPDATE repos\s+SET project_insight/i.test(sql)) {
+      db._repos = db._repos.map(r => r.full_name === p[2]
+        ? { ...r, project_insight: p[0] || '', project_insight_updated_at: p[1] || '' }
+        : r);
+      return { results:[], success:true };
+    }
+    if (/SELECT \*,\s+CASE/i.test(sql)) {
+      const latestByName = new Map();
+      for (const r of db._repos) {
+        const existing = latestByName.get(r.full_name);
+        if (!existing || r.id > existing.id) latestByName.set(r.full_name, r);
+      }
+      const results = [...latestByName.values()]
+        .filter(r => !r.project_insight || !r.project_insight_updated_at || (r.pushed_at && r.pushed_at > r.project_insight_updated_at))
+        .sort((a, b) => {
+          const missingA = !a.project_insight ? 0 : 1;
+          const missingB = !b.project_insight ? 0 : 1;
+          if (missingA !== missingB) return missingA - missingB;
+          return String(b.pushed_at || '').localeCompare(String(a.pushed_at || '')) || b.stars - a.stars;
+        })
+        .slice(0, p[0])
+        .map(r => ({
+          ...r,
+          __insightReason: !r.project_insight
+            ? '缺少项目观察'
+            : !r.project_insight_updated_at
+              ? '缺少生成时间'
+              : '仓库更新后重新生成'
+        }));
+      return { results, success:true };
+    }
     if (/SELECT \* FROM repos/i.test(sql)) {
       const filtered = this._filter(p).sort((a,b)=>a.rank-b.rank);
       return { results: filtered, success:true };
@@ -358,8 +398,8 @@ async function saveRepos(db, repos, crawlDate) {
   const category = repos[0].category;
   await db.prepare('DELETE FROM repos WHERE crawl_date = ? AND category = ?').bind(crawlDate, category).run();
   const stmts = repos.map(r =>
-    db.prepare(`INSERT INTO repos (crawl_date,category,rank,full_name,html_url,description,language,stars,forks,open_issues,pushed_at,topics,homepage,translated_name,translated_desc,project_insight) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-      .bind(crawlDate, r.category, r.rank, r.full_name, r.html_url, r.description, r.language, r.stars, r.forks, r.open_issues, r.pushed_at, r.topics, r.homepage, r.translated_name || '', r.translated_desc || '', r.project_insight || '')
+    db.prepare(`INSERT INTO repos (crawl_date,category,rank,full_name,html_url,description,language,stars,forks,open_issues,pushed_at,topics,homepage,translated_name,translated_desc,project_insight,project_insight_updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .bind(crawlDate, r.category, r.rank, r.full_name, r.html_url, r.description, r.language, r.stars, r.forks, r.open_issues, r.pushed_at, r.topics, r.homepage, r.translated_name || '', r.translated_desc || '', r.project_insight || '', r.project_insight_updated_at || '')
   );
   await db.batch(stmts);
 }
@@ -660,12 +700,13 @@ assertEqual('fmtNum: 1500000',         fmtNum(1500000), '1,500,000');
     'README shows agent orchestration, LLM workflows and developer automation.',
     'Build production AI agents faster.'
   );
-  assert('project insight: 300-500 chars', insight.length >= 300 && insight.length <= 500, `length=${insight.length}`);
+  assert('project insight: long complete content', insight.length >= 300, `length=${insight.length}`);
   assertContains('project insight: mentions audience', insight, '适合');
-  assertContains('project insight: mentions recent heat', insight, '最近变热');
+  assertContains('project insight: mentions recent heat', insight, '最近热度');
   assertContains('project insight: uses daily gain', insight, '345');
   assertContains('project insight: mentions README', insight, 'README');
   assertContains('project insight: mentions adoption checks', insight, '许可证');
+  assertContains('project insight: keeps complete ending', insight, '对比同类方案');
 }
 
 assert('sinceDate(1) < todayCST',      sinceDate(1) < todayCST());
@@ -871,7 +912,7 @@ console.log(YELLOW('\nSuite 4: Worker Source Validation'));
   assertContains('worker: wechat promo static route', src, "'/static/img/wechat-promo.png'");
   assertContains('worker: wechat promo asset module import', src, "from './wechat-promo.js'");
   assertContains('worker: wechat promo asset export', promoAsset, 'export const WECHAT_PROMO_PNG_BASE64');
-  assertContains('worker: wechat promo copy',        src, '关注 HotGit，第一时间发现热门开源项目');
+  assertContains('worker: wechat promo copy',        src, '第一时间发现热门开源项目');
   assertContains('worker: wechat promo table layout', src, 'class="wechat-promo-table"');
   assertContains('worker: wechat promo media cell',   src, 'class="wechat-promo-media"');
   assertContains('worker: wechat promo fixed image height', src, 'width:auto;height:132px;max-width:none');
@@ -879,10 +920,18 @@ console.log(YELLOW('\nSuite 4: Worker Source Validation'));
   assertContains('worker: homepage meta fetcher',    src, 'async function fetchHomepageMeta');
   assertContains('worker: project insight enrichment', src, 'async function enrichProjectInsights');
   assertContains('worker: project insight saved field', src, 'project_insight');
+  assertContains('worker: project insight updated field', src, 'project_insight_updated_at');
+  assertContains('worker: project insight no truncation', src, "return String(text || '').replace(/\\s+/g, ' ').trim()");
+  assertContains('worker: stale insight pending query', src, "pushed_at > COALESCE(project_insight_updated_at, '')");
   assertContains('worker: backfill missing query',   src, 'async function getReposMissingProjectInsights');
+  assertContains('worker: backfill pending query',   src, 'async function getReposPendingProjectInsights');
   assertContains('worker: backfill update query',    src, 'async function updateRepoProjectInsight');
   assertContains('worker: backfill page',            src, 'async function pageBackfillInsights');
   assertContains('worker: detail uses saved insight', src, "repo.project_insight || buildProjectInsight(repo, history, '', '')");
+  assertContains('worker: detail meta uses insight', src, 'metaDescriptionFromInsight');
+  assertContains('worker: detail jsonld abstract',   src, 'abstract: projectInsight');
+  assertContains('worker: llms route',               src, "'/llms.txt'");
+  assertContains('worker: llms page',                src, 'function pageLlmsTxt');
   assertContains('worker: project insight builder',  src, 'function buildProjectInsight');
   assertContains('worker: project insight section',  src, 'class="project-insight"');
   assertContains('worker: project insight heading',  src, '为什么值得关注');
@@ -1017,6 +1066,12 @@ console.log(YELLOW('\nSuite 6: Star Increment Calculation'));
   const sql = readFileSync(path.join(__dirname, '../migrations/0005_add_project_insight.sql'), 'utf8');
   assertContains('migration 5: project_insight column', sql, 'project_insight');
   assertContains('migration 5: alter repos table', sql, 'ALTER TABLE repos');
+}
+
+{
+  const sql = readFileSync(path.join(__dirname, '../migrations/0006_add_project_insight_updated_at.sql'), 'utf8');
+  assertContains('migration 6: project_insight_updated_at column', sql, 'project_insight_updated_at');
+  assertContains('migration 6: alter repos table', sql, 'ALTER TABLE repos');
 }
 
 

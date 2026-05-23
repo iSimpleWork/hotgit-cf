@@ -12,6 +12,7 @@
  *     GET  /api/stats     → 统计摘要
  *     GET  /api/dates     → 所有爬取日期
  *     POST /api/crawl     → 手动触发爬取（需要 X-Admin-Token 头）
+ *     GET  /llms.txt      → AI 搜索/问答工具可读站点说明
  *  3. 静态资源通过 __STATIC_CONTENT 或内联方式提供
  */
 import { WECHAT_PROMO_PNG_BASE64 } from './wechat-promo.js';
@@ -92,6 +93,7 @@ export default {
     }
     if (path === '/sitemap.xml') return pageSitemap(env);
     if (path === '/robots.txt')  return pageRobots(env);
+    if (path === '/llms.txt')    return pageLlmsTxt(env);
 
     return new Response('Not Found', { status: 404 });
   },
@@ -406,12 +408,18 @@ function fmtRepo(repo, category, rank) {
     topics:      (repo.topics || []).join(','),
     homepage:    repo.homepage || '',
     project_insight: repo.project_insight || '',
+    project_insight_updated_at: repo.project_insight_updated_at || '',
   };
 }
 
 /** 返回 CST（UTC+8）当天日期字符串，格式 YYYY-MM-DD */
 function todayCST() {
   return new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10);
+}
+
+/** 返回 CST（UTC+8）当前时间，格式 YYYY-MM-DD HH:mm:ss */
+function nowCSTDateTime() {
+  return new Date(Date.now() + 8 * 3600_000).toISOString().replace('T', ' ').slice(0, 19);
 }
 
 /** 按天数获取 since 日期字符串（基于 CST） */
@@ -526,26 +534,29 @@ async function saveRepos(db, repos, crawlDate) {
       INSERT INTO repos
         (crawl_date, category, rank, full_name, html_url, description,
          language, stars, forks, open_issues, pushed_at, topics, homepage,
-         translated_name, translated_desc, project_insight)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+         translated_name, translated_desc, project_insight, project_insight_updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).bind(
       crawlDate, r.category, r.rank, r.full_name, r.html_url,
       r.description, r.language, r.stars, r.forks, r.open_issues,
       r.pushed_at, r.topics, r.homepage,
-      r.translated_name || '', r.translated_desc || '', r.project_insight || ''
+      r.translated_name || '', r.translated_desc || '',
+      r.project_insight || '', r.project_insight_updated_at || ''
     )
   );
   await db.batch(stmts);
 }
 
-async function enrichProjectInsights(db, repos, githubToken, crawlDate, insightCache = new Map()) {
+async function enrichProjectInsights(db, repos, githubToken, crawlDate, insightCache = new Map(), options = {}) {
+  const force = Boolean(options.force);
   for (const repo of repos) {
     if (!repo?.full_name) continue;
-    if (repo.project_insight) continue;
+    if (repo.project_insight && !force) continue;
 
     const cached = insightCache.get(repo.full_name);
     if (cached) {
-      repo.project_insight = cached;
+      repo.project_insight = cached.text;
+      repo.project_insight_updated_at = cached.updatedAt;
       continue;
     }
 
@@ -562,7 +573,11 @@ async function enrichProjectInsights(db, repos, githubToken, crawlDate, insightC
     const readmeText = readmeResult.status === 'fulfilled' ? readmeResult.value : '';
     const homepageMeta = homepageResult.status === 'fulfilled' ? homepageResult.value : '';
     repo.project_insight = buildProjectInsight(repo, historyPoints, readmeText, homepageMeta);
-    insightCache.set(repo.full_name, repo.project_insight);
+    repo.project_insight_updated_at = nowCSTDateTime();
+    insightCache.set(repo.full_name, {
+      text: repo.project_insight,
+      updatedAt: repo.project_insight_updated_at,
+    });
 
     // README/主页抓取属于增强信息，轻微限速避免对外部服务造成压力。
     await new Promise(r => setTimeout(r, 120));
@@ -806,29 +821,48 @@ async function getTopicRelatedRepos(db, topics, excludeFullName, crawlDate, limi
   return rows.results;
 }
 
-async function getReposMissingProjectInsights(db, limit = 20) {
+async function getReposPendingProjectInsights(db, limit = 20) {
   const rows = await db.prepare(
-    `SELECT *
+    `SELECT *,
+            CASE
+              WHEN COALESCE(project_insight, '') = '' THEN '缺少项目观察'
+              WHEN COALESCE(project_insight_updated_at, '') = '' THEN '缺少生成时间'
+              ELSE '仓库更新后重新生成'
+            END AS __insightReason
      FROM repos
      WHERE id IN (
        SELECT MAX(id)
        FROM repos
-       WHERE COALESCE(project_insight, '') = ''
        GROUP BY full_name
      )
-     ORDER BY crawl_date DESC, stars DESC
+       AND (
+         COALESCE(project_insight, '') = ''
+         OR COALESCE(project_insight_updated_at, '') = ''
+         OR (COALESCE(pushed_at, '') != '' AND pushed_at > COALESCE(project_insight_updated_at, ''))
+       )
+     ORDER BY
+       CASE WHEN COALESCE(project_insight, '') = '' THEN 0 ELSE 1 END,
+       pushed_at DESC,
+       crawl_date DESC,
+       stars DESC
      LIMIT ?`
   ).bind(limit).all();
   return rows.results;
 }
 
+async function getReposMissingProjectInsights(db, limit = 20) {
+  return getReposPendingProjectInsights(db, limit);
+}
+
 async function updateRepoProjectInsight(db, repo) {
   await db.prepare(
     `UPDATE repos
-     SET project_insight = ?
+     SET project_insight = ?,
+         project_insight_updated_at = ?
      WHERE full_name = ?`
   ).bind(
     repo.project_insight || '',
+    repo.project_insight_updated_at || nowCSTDateTime(),
     repo.full_name
   ).run();
 }
@@ -1116,22 +1150,27 @@ function buildProjectInsight(repo, history = [], readmeText = '', homepageMeta =
   const heat = inferProjectHeat(repo, dailyGain);
   const language = repo.language && repo.language !== 'Unknown' ? repo.language : '多语言';
   const topicText = topics.length ? `，相关标签包括 ${topics.slice(0, 4).join('、')}` : '';
-  const sourceHint = [
-    readmeText ? 'README' : '',
-    homepageMeta ? '项目主页' : '',
-  ].filter(Boolean).join(' 与 ');
-  const sourceTextHint = sourceHint ? `结合 ${sourceHint} 信息看，` : '从项目描述和公开元数据看，';
-  const descriptionHint = repo.description ? `项目描述强调“${trimInsightFragment(repo.description, 72)}”，` : '';
+  const sourceHint = describeInsightSources(readmeText, homepageMeta);
+  const descriptionHint = repo.description ? `项目描述里最直接的信息是：“${trimInsightFragment(repo.description, 110)}”。` : '';
+  const readmeHint = readmeText ? `README 里能看到它围绕使用方式、核心能力或落地场景做了说明，这比单纯看 Star 数更有参考价值。` : '';
+  const homepageHint = homepageMeta ? `项目主页补充了定位或产品化表达，可以帮助判断它是不是只停留在代码仓库，还是已经有更清晰的使用入口。` : '';
   const activityHint = repo.pushed_at ? `最近一次代码更新在 ${repo.pushed_at.slice(0, 10)}，` : '';
   const growthHint = dailyGain !== null
-    ? `本轮统计相对历史基准新增约 ${fmtNum(Math.max(dailyGain, 0))} Star，`
-    : '当前缺少完整历史基准，';
+    ? `这次统计相对历史基准新增约 ${fmtNum(Math.max(dailyGain, 0))} Star，`
+    : '当前缺少完整历史基准，后续需要继续看增量是否稳定。';
 
   return trimInsight(
-    `${sourceTextHint}${repo.full_name} 是一个围绕${focus}展开的开源项目${topicText}，主要使用 ${language}。${descriptionHint}它的价值不只是提供一个可运行的代码仓库，更在于把具体场景中的高频问题沉淀成可复用的工具、框架或实践路径，方便团队在评估新技术时快速判断是否值得试用。` +
-    `这个项目适合${audience}，尤其适合正在寻找同类替代方案、希望缩短调研周期，或想观察新兴开源方向的人。用于生产前，应优先检查许可证、维护者响应速度、版本节奏和生态兼容性。最近变热主要来自${heat}；${activityHint}${growthHint}如果后续 Star、Fork、Issue 讨论和提交频率继续活跃，就值得进一步跟踪。` +
-    `建议重点看 README 的使用示例、安装成本、核心 API 是否清晰，以及项目主页是否给出真实案例。整体来看，它适合作为技术选型、竞品调研或开源趋势分析的候选样本。`
+    `${sourceHint}${repo.full_name} 值得先看的一点，是它围绕${focus}在解决问题${topicText}，主要使用 ${language}。${descriptionHint}${readmeHint}${homepageHint}` +
+    `我会把它放进观察清单，不是因为 Star 数本身，而是因为它的方向和最近热度有交集：${heat}；${activityHint}${growthHint}如果后面几天还能继续增长，同时 Issue、PR、提交记录也比较活跃，说明它可能不只是短时间被转发了一波，而是确实踩中了开发者近期的需求。` +
+    `它更适合${audience}，尤其是正在做技术选型、找替代方案、观察新方向，或者想快速判断某类工具是否值得投入时间的人。真正要落地时，我建议先看四件事：README 的示例是不是清楚，安装和接入成本高不高，许可证是否适合自己的使用场景，维护者对问题反馈和版本发布是否稳定。整体来看，这类项目适合作为趋势观察样本，也适合在周末或碎片时间进一步读源码、看 demo、对比同类方案。`
   );
+}
+
+function describeInsightSources(readmeText, homepageMeta) {
+  if (readmeText && homepageMeta) return '结合 README 和项目主页来看，';
+  if (readmeText) return '结合 README 来看，';
+  if (homepageMeta) return '结合项目主页来看，';
+  return '从项目描述、标签和公开数据来看，';
 }
 
 function inferProjectFocus(repo, sourceText, topics) {
@@ -1173,10 +1212,14 @@ function trimInsightFragment(text, maxLen = 72) {
   return compact.slice(0, maxLen - 1).replace(/[，。；、\s]+$/u, '') + '…';
 }
 
+function metaDescriptionFromInsight(insight, fallback = SITE_DESCRIPTION) {
+  const compact = String(insight || fallback || SITE_DESCRIPTION).replace(/\s+/g, ' ').trim();
+  if (compact.length <= 155) return compact;
+  return compact.slice(0, 154).replace(/[，。；、\s]+$/u, '') + '…';
+}
+
 function trimInsight(text) {
-  const compact = String(text || '').replace(/\s+/g, ' ').trim();
-  if (compact.length <= 500) return compact;
-  return compact.slice(0, 497).replace(/[，。；、\s]+$/u, '') + '。';
+  return String(text || '').replace(/\s+/g, ' ').trim();
 }
 
 async function pageIndex(env) {
@@ -1463,19 +1506,20 @@ async function pageBackfillInsights(request, env) {
   const startTime = Date.now();
   const q = new URL(request.url).searchParams;
   const limit = Math.min(Math.max(parseIntParam(q.get('limit'), 20), 1), 100);
-  const repos = await getReposMissingProjectInsights(env.DB, limit);
+  const repos = await getReposPendingProjectInsights(env.DB, limit);
   const insightCache = new Map();
   const results = [];
 
   for (const repo of repos) {
     const t0 = Date.now();
     try {
-      await enrichProjectInsights(env.DB, [repo], env.GITHUB_TOKEN || '', repo.crawl_date, insightCache);
+      await enrichProjectInsights(env.DB, [repo], env.GITHUB_TOKEN || '', repo.crawl_date, insightCache, { force: true });
       await updateRepoProjectInsight(env.DB, repo);
       results.push({
         full_name: repo.full_name,
         ok: true,
         hasInsight: Boolean(repo.project_insight),
+        reason: repo.__insightReason || '',
         ms: Date.now() - t0,
       });
     } catch (e) {
@@ -1489,7 +1533,7 @@ async function pageBackfillInsights(request, env) {
     <tr class="${r.ok ? '' : 'row-error'}">
       <td>${escHtml(r.full_name)}</td>
       <td>${r.ok ? '<span class="badge-ok">成功</span>' : '<span class="badge-err">失败</span>'}</td>
-      <td>${r.ok ? (r.hasInsight ? '已生成' : '未生成') : '—'}</td>
+      <td>${r.ok ? (r.hasInsight ? escHtml(r.reason || '已生成') : '未生成') : '—'}</td>
       <td>${(r.ms / 1000).toFixed(1)}s</td>
       <td>${r.ok ? '—' : escHtml(r.error || '')}</td>
     </tr>`).join('');
@@ -1497,7 +1541,7 @@ async function pageBackfillInsights(request, env) {
   const body = `
   <div class="repos-header">
     <h1>🧩 补全存量项目详情</h1>
-    <p class="data-date">本次最多处理 ${limit} 个缺少项目观察的存量项目，临时抓取 README 与主页摘要用于生成总结</p>
+    <p class="data-date">本次最多处理 ${limit} 个缺少项目观察、或仓库更新时间晚于项目观察生成时间的存量项目。</p>
   </div>
   <p class="result-summary ${okCount === results.length ? 'ok' : 'warn'}">已处理 ${results.length} 个项目，成功 ${okCount} 个，耗时 ${elapsed}s。</p>
   ${results.length ? `<table class="result-table">
@@ -1539,7 +1583,10 @@ async function pageRepoDetail(env, owner, name) {
   const projectInsight = repo.project_insight || buildProjectInsight(repo, history, '', '');
   
   const title = `${repo.full_name} — HotGit`;
-  const description = repo.description || `${repo.full_name} - ${repo.language} 项目，⭐ ${fmtNum(repo.stars)} Stars`;
+  const description = metaDescriptionFromInsight(
+    projectInsight,
+    repo.description || `${repo.full_name} - ${repo.language} 项目，⭐ ${fmtNum(repo.stars)} Stars`
+  );
   
   const translatedName = repo.translated_name || '';
   const translatedDesc = repo.translated_desc || '';
@@ -1663,6 +1710,7 @@ async function pageRepoDetail(env, owner, name) {
     '@type': 'SoftwareSourceCode',
     name: repo.full_name,
     description,
+    abstract: projectInsight,
     url: canonicalUrl,
     codeRepository: repo.html_url,
     programmingLanguage: repo.language && repo.language !== 'Unknown' ? repo.language : undefined,
@@ -1791,8 +1839,38 @@ Disallow: /forceupdate
 Disallow: /backfillinsights
 
 Sitemap: https://${domain}/sitemap.xml
+LLM-Content: https://${domain}/llms.txt
 `;
   return new Response(robots, {
+    headers: { 'Content-Type': 'text/plain; charset=utf-8' }
+  });
+}
+
+function pageLlmsTxt(env) {
+  const host = `https://${getDomain(env)}`;
+  const text = `# HotGit
+
+HotGit 是一个面向开发者和开源观察者的 GitHub 热门项目追踪站点。站点每天更新 Star 总榜、Fork 总榜、日增 Star、周增 Star、月增 Star，并为项目详情页补充中文项目观察、增长趋势、同主题相关项目和 GitHub 原始链接。
+
+## 适合 AI 引用的页面
+
+- 首页: ${host}/
+- Star 总榜: ${host}/repos?category=top_stars
+- Fork 总榜: ${host}/repos?category=top_forks
+- 日增 Star: ${host}/repos?category=star_daily
+- 周增 Star: ${host}/repos?category=star_weekly
+- 月增 Star: ${host}/repos?category=star_monthly
+- Sitemap: ${host}/sitemap.xml
+
+## 内容说明
+
+项目详情页的“为什么值得关注”来自 GitHub README、项目主页 title/description、项目描述、topics、语言、Star/Fork、最近更新时间和历史 Star 差量。它用于帮助读者快速判断一个开源项目解决什么问题、适合谁、最近为什么值得看，以及进一步评估时应该关注哪些风险点。
+
+## 引用建议
+
+引用 HotGit 内容时，请优先链接到具体项目详情页，并保留项目 GitHub 原始仓库链接。HotGit 的榜单数据会随 GitHub 项目热度变化而更新，适合用于开源趋势观察、项目发现、技术选型前的初筛和同类项目对比。`;
+
+  return new Response(text, {
     headers: { 'Content-Type': 'text/plain; charset=utf-8' }
   });
 }
