@@ -1082,6 +1082,19 @@ const ANALYTICS_HEAD_SNIPPET = `
     gtag('config', 'G-RJDEV8XM5Y');
   </script>`;
 
+const JOURNEY_GROW_HEAD_SNIPPET=`<script data-grow-initializer="">!(function(){window.growMe||((window.growMe=function(e){window.growMe._.push(e);}),(window.growMe._=[]));var e=document.createElement("script");(e.type="text/javascript"),(e.src="https://faves.grow.me/main.js"),(e.defer=!0),e.setAttribute("data-grow-faves-site-id","U2l0ZTo5NTE1NTE5NC04Nzc5LTRlYWUtOTRhZi04YmU0ZjcwODU2YmU=");var t=document.getElementsByTagName("script")[0];t.parentNode.insertBefore(e,t);})();</script>`;
+
+const EZOIC_HEAD_SNIPPET=`
+<script data-cfasync="false" src="https://cmp.gatekeeperconsent.com/min.js"></script>
+<script data-cfasync="false" src="https://the.gatekeeperconsent.com/cmp.min.js"></script>
+<script async src="//www.ezojs.com/ezoic/sa.min.js"></script>
+<script>
+    window.ezstandalone = window.ezstandalone || {};
+    ezstandalone.cmd = ezstandalone.cmd || [];
+</script>
+<script src="//ezoicanalytics.com/analytics.js"></script>
+`;
+
 function baseLayout(title, bodyContent, options = {}) {
   const description = options.description || SITE_DESCRIPTION;
   const canonicalUrl = options.canonicalUrl || '';
@@ -1109,6 +1122,8 @@ function baseLayout(title, bodyContent, options = {}) {
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔥</text></svg>"/>
   ${extraHead}
 ${ANALYTICS_HEAD_SNIPPET}
+${JOURNEY_GROW_HEAD_SNIPPET}
+${EZOIC_HEAD_SNIPPET}
 </head>
 <body>
   <nav class="navbar">
