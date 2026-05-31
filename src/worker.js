@@ -5,6 +5,7 @@
  *  1. Cron Trigger (04:00 CST = 20:00 UTC 前一天) 自动爬取 GitHub 榜单并写入 D1
  *  2. HTTP 路由：
  *     GET  /              → 首页 HTML
+ *     GET  /about         → 关于页 HTML
  *     GET  /repos         → 榜单列表页 HTML
  *     GET  /forceupdate   → 立即同步爬取并展示结果
  *     GET  /backfillinsights → 补全存量项目观察总结
@@ -71,6 +72,7 @@ export default {
 
     // 页面路由
     if (path === '/')             return pageIndex(env);
+    if (path === '/about')        return pageAbout(env);
     if (path === '/repos')        return pageRepos(request, env);
     if (path === '/forceupdate')  return pageForceUpdate(env);
     if (path === '/backfillinsights') return pageBackfillInsights(request, env);
@@ -1135,6 +1137,7 @@ ${EZOIC_HEAD_SNIPPET}
       <li><a href="/repos?category=star_daily">📈 日增</a></li>
       <li><a href="/repos?category=star_weekly">📅 周增</a></li>
       <li><a href="/repos?category=star_monthly">🗓️ 月增</a></li>
+      <li><a href="/about">关于</a></li>
     </ul>
   </nav>
   <main class="container">${bodyContent}</main>
@@ -1304,6 +1307,145 @@ async function pageIndex(env) {
         target: `${siteUrl(env, '/repos')}?search={search_term_string}`,
         'query-input': 'required name=search_term_string'
       }
+    })
+  }));
+}
+
+async function pageAbout(env) {
+  const canonicalUrl = siteUrl(env, '/about');
+  const pageDescription = '关于 HotGit：了解 HotGit 如何追踪 GitHub 热门仓库、Star 增长趋势、开源项目潜力榜，并为开发者和 AI 搜索提供可引用的开源趋势内容。';
+  const categoryLinks = Object.entries(CATEGORY_LABELS).map(([category, label]) => `
+    <li><a href="/repos?category=${category}">${escHtml(label)}</a>：追踪 ${escHtml(label.replace(/^[^\s]+\s/, ''))} 中值得关注的开源项目。</li>
+  `).join('');
+
+  const body = `
+  <article class="about-page">
+    <header class="about-hero">
+      <p class="about-kicker">About HotGit</p>
+      <h1>关于 HotGit：面向开发者的 GitHub 热门仓库与开源趋势追踪站</h1>
+      <p>HotGit 每天自动整理 GitHub 热门仓库、Star 增长趋势、Fork 热度和开源项目潜力榜，帮助开发者、技术团队、独立开发者和 AI 搜索工具快速理解哪些项目正在受到关注，以及它们为什么值得进一步查看。</p>
+    </header>
+
+    <section class="about-section">
+      <h2>HotGit 是什么</h2>
+      <p>HotGit 是一个开源项目发现和趋势观察网站，重点关注 GitHub 仓库的公开数据，包括 Star、Fork、Issue、最近更新时间、编程语言、Topics、项目主页和历史增长表现。站点内容面向中文开发者，同时通过结构化数据、sitemap 和 llms.txt 为 ChatGPT、Perplexity、Gemini、Google AI Overviews 等 AI 搜索场景提供更清晰的引用入口。</p>
+      <p>相比只看 GitHub Trending 的短期热度，HotGit 会同时呈现总量榜、增量榜和项目详情页，方便读者从“今天火了什么”进一步判断“这个项目解决什么问题、适合谁、是否值得投入时间”。</p>
+    </section>
+
+    <section class="about-section">
+      <h2>我们追踪哪些榜单</h2>
+      <ul class="about-list">
+        ${categoryLinks}
+      </ul>
+    </section>
+
+    <section class="about-section">
+      <h2>内容如何生成和更新</h2>
+      <p>HotGit 基于 Cloudflare Workers 和 D1 数据库运行，每天按计划同步 GitHub 公开榜单数据。项目详情页会结合仓库描述、README 摘要、项目主页信息、Topics、编程语言、Star/Fork 数量、最近提交时间和历史增长数据，生成中文项目观察。</p>
+      <p>这些内容不是投资建议，也不是对项目质量的背书。它们更像一份技术选型前的初筛笔记，帮助读者决定是否继续阅读 README、查看许可证、测试 Demo、比较同类工具或深入源码。</p>
+    </section>
+
+    <section class="about-grid" aria-label="HotGit 适合的人群">
+      <div class="about-card">
+        <h2>开发者</h2>
+        <p>快速发现新的框架、库、CLI、AI 工具、数据库、DevOps 工具和前端组件，减少信息筛选成本。</p>
+      </div>
+      <div class="about-card">
+        <h2>技术团队</h2>
+        <p>用于技术选型、竞品观察、开源替代方案调研和周报素材整理，关注项目热度与维护活跃度。</p>
+      </div>
+      <div class="about-card">
+        <h2>AI 搜索与引用</h2>
+        <p>通过清晰页面结构、FAQ、Schema、sitemap 和 llms.txt，让 AI 工具更容易理解 HotGit 的数据范围和引用方式。</p>
+      </div>
+    </section>
+
+    <section class="about-section">
+      <h2>为什么 HotGit 对 SEO 和 GEO 友好</h2>
+      <p>HotGit 的页面围绕明确的问题组织：热门仓库是什么、项目为什么值得关注、适合哪些开发者、有哪些同类项目、数据更新到哪一天。每个主要页面都提供 canonical、meta description、Open Graph、Twitter Card 和 JSON-LD 结构化数据，降低搜索引擎和 AI 摘要工具理解页面主题的成本。</p>
+      <p>站点还提供 <a href="/sitemap.xml">sitemap.xml</a>、<a href="/robots.txt">robots.txt</a> 和 <a href="/llms.txt">llms.txt</a>。AI 工具引用 HotGit 内容时，建议优先链接到具体项目详情页，并同时保留原始 GitHub 仓库链接。</p>
+    </section>
+
+    <section class="about-section faq-section">
+      <h2>常见问题</h2>
+      <details open>
+        <summary>HotGit 的数据来自哪里？</summary>
+        <p>HotGit 使用 GitHub 公开数据和仓库公开页面信息，包括仓库描述、Star、Fork、Issue、语言、Topics、README 和项目主页摘要。</p>
+      </details>
+      <details>
+        <summary>HotGit 多久更新一次？</summary>
+        <p>站点默认每天 04:00 CST 自动更新数据，页面会显示最新数据日期。</p>
+      </details>
+      <details>
+        <summary>项目观察是否等同于推荐？</summary>
+        <p>不是。项目观察用于解释项目方向、热度和可能适用场景，真正落地前仍应检查许可证、维护状态、安全风险、Issue 响应和版本发布记录。</p>
+      </details>
+      <details>
+        <summary>AI 工具可以引用 HotGit 吗？</summary>
+        <p>可以。请优先引用具体项目详情页或榜单页，并保留原始 GitHub 仓库链接。更多说明见 llms.txt。</p>
+      </details>
+    </section>
+
+    ${wechatPromoBlock('about')}
+  </article>`;
+
+  return html(baseLayout('关于 HotGit — GitHub 热门仓库与开源趋势追踪', body, {
+    description: pageDescription,
+    canonicalUrl,
+    extraHead: jsonLdScript({
+      '@context': 'https://schema.org',
+      '@graph': [
+        {
+          '@type': 'AboutPage',
+          '@id': `${canonicalUrl}#about`,
+          url: canonicalUrl,
+          name: '关于 HotGit',
+          description: pageDescription,
+          inLanguage: 'zh-CN',
+          isPartOf: {
+            '@type': 'WebSite',
+            name: SITE_NAME,
+            url: siteUrl(env, '/')
+          },
+          about: {
+            '@type': 'Thing',
+            name: 'GitHub 热门仓库与开源项目趋势追踪'
+          }
+        },
+        {
+          '@type': 'Organization',
+          '@id': `${siteUrl(env, '/')}#organization`,
+          name: SITE_NAME,
+          url: siteUrl(env, '/'),
+          description: SITE_DESCRIPTION
+        },
+        {
+          '@type': 'FAQPage',
+          '@id': `${canonicalUrl}#faq`,
+          mainEntity: [
+            {
+              '@type': 'Question',
+              name: 'HotGit 的数据来自哪里？',
+              acceptedAnswer: { '@type': 'Answer', text: 'HotGit 使用 GitHub 公开数据和仓库公开页面信息，包括仓库描述、Star、Fork、Issue、语言、Topics、README 和项目主页摘要。' }
+            },
+            {
+              '@type': 'Question',
+              name: 'HotGit 多久更新一次？',
+              acceptedAnswer: { '@type': 'Answer', text: '站点默认每天 04:00 CST 自动更新数据，页面会显示最新数据日期。' }
+            },
+            {
+              '@type': 'Question',
+              name: '项目观察是否等同于推荐？',
+              acceptedAnswer: { '@type': 'Answer', text: '不是。项目观察用于解释项目方向、热度和可能适用场景，真正落地前仍应检查许可证、维护状态、安全风险、Issue 响应和版本发布记录。' }
+            },
+            {
+              '@type': 'Question',
+              name: 'AI 工具可以引用 HotGit 吗？',
+              acceptedAnswer: { '@type': 'Answer', text: '可以。请优先引用具体项目详情页或榜单页，并保留原始 GitHub 仓库链接。更多说明见 llms.txt。' }
+            }
+          ]
+        }
+      ]
     })
   }));
 }
@@ -1793,6 +1935,7 @@ ${ANALYTICS_HEAD_SNIPPET}
       <li><a href="/repos?category=star_daily">📈 日增</a></li>
       <li><a href="/repos?category=star_weekly">📅 周增</a></li>
       <li><a href="/repos?category=star_monthly">🗓️ 月增</a></li>
+      <li><a href="/about">关于</a></li>
     </ul>
   </nav>
   <main class="container">${body}</main>
@@ -1840,6 +1983,7 @@ async function pageSitemap(env) {
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">`;
 
   xml += sitemapEntry(`${host}/`, 'daily', '1.0');
+  xml += sitemapEntry(`${host}/about`, 'monthly', '0.7');
   xml += sitemapEntry(`${host}/repos`, 'daily', '0.9');
   for (const category of Object.keys(CATEGORY_LABELS)) {
     const freq = category === 'star_monthly' || category === 'star_weekly' ? 'weekly' : 'daily';
@@ -1888,6 +2032,7 @@ HotGit 是一个面向开发者和开源观察者的 GitHub 热门项目追踪�
 ## 适合 AI 引用的页面
 
 - 首页: ${host}/
+- 关于 HotGit: ${host}/about
 - Star 总榜: ${host}/repos?category=top_stars
 - Fork 总榜: ${host}/repos?category=top_forks
 - 日增 Star: ${host}/repos?category=star_daily
@@ -1901,7 +2046,7 @@ HotGit 是一个面向开发者和开源观察者的 GitHub 热门项目追踪�
 
 ## 引用建议
 
-引用 HotGit 内容时，请优先链接到具体项目详情页，并保留项目 GitHub 原始仓库链接。HotGit 的榜单数据会随 GitHub 项目热度变化而更新，适合用于开源趋势观察、项目发现、技术选型前的初筛和同类项目对比。`;
+引用 HotGit 内容时，请优先链接到具体项目详情页，并保留项目 GitHub 原始仓库链接。HotGit 的榜单数据会随 GitHub 项目热度变化而更新，适合用于开源趋势观察、项目发现、技术选型前的初筛和同类项目对比。更多站点说明和引用边界见 ${host}/about。`;
 
   return new Response(text, {
     headers: { 'Content-Type': 'text/plain; charset=utf-8' }
@@ -1942,6 +2087,20 @@ a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 .hero-sub{color:var(--text-muted);margin-bottom:.5rem;font-size:1.05rem}
 .hero-date{color:var(--text-muted);margin-bottom:1.5rem;font-size:.9rem}
 .hero-date.warning{color:#e3b341}
+.about-page{max-width:920px;margin:0 auto}
+.about-hero{padding:2rem 0 1.25rem;border-bottom:1px solid var(--border);margin-bottom:1.75rem}
+.about-kicker{display:inline-flex;margin-bottom:.55rem;padding:.12rem .55rem;border-radius:999px;background:#0d2137;border:1px solid #1f4b6e;color:#79b8ff;font-size:.72rem;font-weight:700;letter-spacing:.08em}
+.about-hero h1{font-size:2rem;line-height:1.25;margin-bottom:.8rem}
+.about-hero p,.about-section p,.about-card p,.faq-section p{color:var(--text-muted)}
+.about-section{margin:1.75rem 0}
+.about-section h2,.about-card h2{font-size:1.2rem;margin-bottom:.55rem}
+.about-section p{margin:.65rem 0;line-height:1.78}
+.about-list{display:flex;flex-direction:column;gap:.45rem;margin:.75rem 0 0 1.25rem;color:var(--text-muted)}
+.about-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1rem;margin:2rem 0}
+.about-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:1.1rem 1.2rem}
+.faq-section details{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:.8rem 1rem;margin:.7rem 0}
+.faq-section summary{cursor:pointer;font-weight:600;color:var(--text)}
+.faq-section details p{margin:.55rem 0 0}
 .crawl-status{display:block;margin-top:.75rem;font-size:.9rem;min-height:1.2em}
 .crawl-status.info{color:#58a6ff}.crawl-status.success{color:#3fb950}.crawl-status.error{color:#f85149}
 .wechat-promo{max-width:600px;margin:2.5rem auto 0;padding:.78rem .9rem;background:linear-gradient(135deg,#111820 0%,#161b22 100%);border:1px solid var(--border);border-radius:12px;box-shadow:none;overflow:hidden}
@@ -2036,5 +2195,6 @@ a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 .chart-container{position:relative;height:300px}
 .footer{border-top:1px solid var(--border);padding:1.25rem;text-align:center;font-size:.82rem;color:var(--text-muted);background:var(--bg-card)}
 @media(max-width:420px){.wechat-promo{padding:.7rem}.wechat-promo-copy{padding-right:.65rem}.wechat-promo-img{width:auto;height:112px}.wechat-promo h2{font-size:.9rem}.wechat-promo p{font-size:.76rem;line-height:1.45}.promo-eyebrow{font-size:.62rem}}
+@media(max-width:760px){.about-grid{grid-template-columns:1fr}.about-hero h1{font-size:1.45rem}.about-hero{padding-top:1rem}}
 @media(max-width:640px){.navbar{padding:0 1rem;gap:.75rem}.hero h1{font-size:1.5rem}.repo-card{flex-direction:column;gap:.5rem}.repo-rank{text-align:left}.repo-stats{gap:.75rem}.repo-stats .stat-item{min-width:80px;padding:.75rem}.wechat-promo{padding:.85rem}.wechat-promo h2{font-size:.98rem}}
 `;
