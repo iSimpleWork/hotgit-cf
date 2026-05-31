@@ -25,11 +25,83 @@ const DEFAULT_DOMAIN = 'hotgit-cf.linkai.workers.dev';
 const SITE_NAME = 'HotGit';
 const SITE_DESCRIPTION = 'HotGit 每日追踪 GitHub 热门仓库、Star 增长趋势和开源项目潜力榜，帮开发者及时发现值得关注的开源项目。';
 const WECHAT_PROMO_ALT = '项目值得看 公众号二维码，扫码关注获取最新热门项目资讯及深度解读';
+const DEFAULT_LOCALE = 'zh-CN';
+const LOCALES = {
+  'zh-CN': { code: 'zh-CN', prefix: '/zh-CN', label: '中文', shortLabel: '中文' },
+  en: { code: 'en', prefix: '/en', label: 'English', shortLabel: 'EN' },
+};
+const LOCALE_COOKIE = 'hotgit_locale';
 
 let DOMAIN = DEFAULT_DOMAIN;
 
 function getDomain(env) {
   return env.DOMAIN || DOMAIN;
+}
+
+function normalizeLocale(locale) {
+  return LOCALES[locale] ? locale : DEFAULT_LOCALE;
+}
+
+function parseLocalizedPath(pathname) {
+  for (const locale of Object.keys(LOCALES)) {
+    const prefix = LOCALES[locale].prefix;
+    if (pathname === prefix || pathname.startsWith(`${prefix}/`)) {
+      const path = pathname.slice(prefix.length) || '/';
+      return { locale, prefix, path, hasPrefix: true };
+    }
+  }
+  return { locale: DEFAULT_LOCALE, prefix: '', path: pathname || '/', hasPrefix: false };
+}
+
+function getPreferredLocale(request) {
+  const cookie = request.headers.get('Cookie') || '';
+  const match = cookie.match(new RegExp(`(?:^|;\\s*)${LOCALE_COOKIE}=([^;]+)`));
+  return normalizeLocale(match ? decodeURIComponent(match[1]) : DEFAULT_LOCALE);
+}
+
+function hasLocaleCookie(request) {
+  return new RegExp(`(?:^|;\\s*)${LOCALE_COOKIE}=`).test(request.headers.get('Cookie') || '');
+}
+
+function shouldRedirectToPreferredLocale(path) {
+  return path === '/' || path === '/about' || path === '/repos' || /^\/repo\//.test(path) || /^\/r\/\d+$/.test(path);
+}
+
+function redirectToLocale(url, locale) {
+  const nextUrl = new URL(url.toString());
+  nextUrl.pathname = localizedPath(locale, nextUrl.pathname);
+  return withLocaleCookie(Response.redirect(nextUrl.toString(), 302), locale);
+}
+
+function withLocaleCookie(response, locale) {
+  if (!locale) return response;
+  const headers = new Headers(response.headers);
+  headers.append('Set-Cookie', `${LOCALE_COOKIE}=${encodeURIComponent(normalizeLocale(locale))}; Path=/; Max-Age=31536000; SameSite=Lax; Secure`);
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
+function localizedPath(locale, path = '/') {
+  locale = normalizeLocale(locale);
+  const cleanPath = path.startsWith('/') ? path : `/${path}`;
+  return `${LOCALES[locale].prefix}${cleanPath === '/' ? '/' : cleanPath}`;
+}
+
+function routePath(path, langPrefix = '') {
+  if (!langPrefix) return path;
+  const cleanPath = path.startsWith('/') ? path : `/${path}`;
+  return `${langPrefix}${cleanPath === '/' ? '/' : cleanPath}`;
+}
+
+function routeUrl(env, path, locale = DEFAULT_LOCALE) {
+  return siteUrl(env, localizedPath(locale, path));
+}
+
+function categoryLabels(locale = DEFAULT_LOCALE) {
+  return locale === 'en' ? CATEGORY_LABELS_EN : CATEGORY_LABELS;
+}
+
+function tr(locale, zh, en) {
+  return locale === 'en' ? en : zh;
 }
 
 const CATEGORY_LABELS = {
@@ -38,6 +110,14 @@ const CATEGORY_LABELS = {
   star_daily:   '📈 日增 Star',
   star_weekly:  '📅 周增 Star',
   star_monthly: '🗓️ 月增 Star',
+};
+
+const CATEGORY_LABELS_EN = {
+  top_stars:    '⭐ Top Stars',
+  top_forks:    '🍴 Top Forks',
+  star_daily:   '📈 Daily Stars',
+  star_weekly:  '📅 Weekly Stars',
+  star_monthly: '🗓️ Monthly Stars',
 };
 
 // ── Env 类型（供 JSDoc 注释）─────────────────────────────────────────
@@ -55,25 +135,34 @@ export default {
   // HTTP 请求
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    const path = url.pathname;
+    const originalPath = url.pathname;
+    const localeRoute = parseLocalizedPath(originalPath);
+    const path = localeRoute.path;
+    const locale = localeRoute.locale;
+    const langPrefix = localeRoute.prefix;
 
     // 静态资源
-    if (path.startsWith('/static/')) {
-      return handleStatic(path);
+    if (originalPath.startsWith('/static/')) {
+      return handleStatic(originalPath);
     }
 
     // API 路由
-    if (path === '/api/repos')  return apiRepos(request, env);
-    if (path === '/api/stats')  return apiStats(env);
-    if (path === '/api/dates')  return apiDates(env);
-    if (path === '/api/crawl' && request.method === 'POST') {
+    if (originalPath === '/api/repos')  return apiRepos(request, env);
+    if (originalPath === '/api/stats')  return apiStats(env);
+    if (originalPath === '/api/dates')  return apiDates(env);
+    if (originalPath === '/api/crawl' && request.method === 'POST') {
       return apiCrawl(request, env, ctx);
     }
 
+    const preferredLocale = localeRoute.hasPrefix ? locale : getPreferredLocale(request);
+    if (!localeRoute.hasPrefix && hasLocaleCookie(request) && shouldRedirectToPreferredLocale(path)) {
+      return redirectToLocale(url, preferredLocale);
+    }
+
     // 页面路由
-    if (path === '/')             return pageIndex(env);
-    if (path === '/about')        return pageAbout(env);
-    if (path === '/repos')        return pageRepos(request, env);
+    if (path === '/')             return withLocaleCookie(await pageIndex(env, locale, langPrefix), localeRoute.hasPrefix ? locale : null);
+    if (path === '/about')        return withLocaleCookie(await pageAbout(env, locale, langPrefix), localeRoute.hasPrefix ? locale : null);
+    if (path === '/repos')        return withLocaleCookie(await pageRepos(request, env, locale, langPrefix), localeRoute.hasPrefix ? locale : null);
     if (path === '/forceupdate')  return pageForceUpdate(env);
     if (path === '/backfillinsights') return pageBackfillInsights(request, env);
     
@@ -86,16 +175,16 @@ export default {
       try { name = decodeURIComponent(name); } catch(e) {}
       const fullName = `${owner}/${name}`;
       console.log('[repo] path:', path, '-> fullName:', fullName);
-      return pageRepoDetail(env, owner, name);
+      return withLocaleCookie(await pageRepoDetail(env, owner, name, locale, langPrefix), localeRoute.hasPrefix ? locale : null);
     }
     // ID 路由 /r/123
     const idMatch = path.match(/^\/r\/(\d+)$/);
     if (idMatch) {
-      return pageRepoDetailById(env, parseInt(idMatch[1]));
+      return withLocaleCookie(await pageRepoDetailById(env, parseInt(idMatch[1]), locale, langPrefix), localeRoute.hasPrefix ? locale : null);
     }
-    if (path === '/sitemap.xml') return pageSitemap(env);
+    if (path === '/sitemap.xml') return pageSitemap(env, localeRoute.hasPrefix ? locale : null);
     if (path === '/robots.txt')  return pageRobots(env);
-    if (path === '/llms.txt')    return pageLlmsTxt(env);
+    if (path === '/llms.txt')    return pageLlmsTxt(env, localeRoute.hasPrefix ? locale : null);
 
     return new Response('Not Found', { status: 404 });
   },
@@ -914,6 +1003,46 @@ async function saveTranslation(db, textHash, targetLang, translatedText) {
   ).bind(textHash, targetLang, translatedText).run();
 }
 
+async function getRepoFieldTranslation(db, repo, fieldName, targetLang) {
+  if (!repo?.id || !fieldName || !targetLang) return null;
+  try {
+    const row = await db.prepare(
+      `SELECT translated_text
+       FROM translations
+       WHERE repo_id = ? AND field_name = ? AND target_lang = ?
+       ORDER BY updated_at DESC, created_at DESC
+       LIMIT 1`
+    ).bind(repo.id, fieldName, targetLang).first();
+    return row?.translated_text || null;
+  } catch (e) {
+    console.log('[repo translation] read error:', e.message);
+    return null;
+  }
+}
+
+async function saveRepoFieldTranslation(db, repo, fieldName, targetLang, translatedText, sourceText = '', sourceLang = '') {
+  if (!repo?.id || !fieldName || !targetLang || !translatedText) return;
+  try {
+    const textHash = hashString(`${repo.id}|${fieldName}|${targetLang}`);
+    await db.prepare(
+      `INSERT OR REPLACE INTO translations
+        (text_hash, repo_id, full_name, field_name, source_lang, target_lang, source_text, translated_text, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`
+    ).bind(
+      textHash,
+      repo.id,
+      repo.full_name || '',
+      fieldName,
+      sourceLang || detectTextLanguage(sourceText || translatedText),
+      targetLang,
+      sourceText || translatedText,
+      translatedText
+    ).run();
+  } catch (e) {
+    console.log('[repo translation] save error:', e.message);
+  }
+}
+
 function hashString(str) {
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
@@ -927,7 +1056,8 @@ function hashString(str) {
 async function translateText(db, text, targetLang = 'en') {
   if (!text || text.length < 3) return null;
   const sourceLang = /[\u4e00-\u9fa5]/.test(text) ? 'zh' : 'en';
-  if (sourceLang === targetLang) {
+  const apiTargetLang = translationApiLang(targetLang);
+  if (sourceLang === apiTargetLang) {
     console.log('[translate] skip: source same as target', sourceLang);
     return null;
   }
@@ -946,7 +1076,7 @@ async function translateText(db, text, targetLang = 'en') {
   }
   
   try {
-    const langPair = `${sourceLang}|${targetLang}`;
+    const langPair = `${sourceLang}|${apiTargetLang}`;
     const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text.slice(0, 500))}&langpair=${langPair}`;
     console.log('[translate] calling API:', text.slice(0, 30), '->', targetLang);
     const res = await fetch(url);
@@ -965,6 +1095,93 @@ async function translateText(db, text, targetLang = 'en') {
     console.log('[translate] error:', e.message);
   }
   return null;
+}
+
+function translationApiLang(lang) {
+  if (!lang) return 'en';
+  const normalized = String(lang).toLowerCase();
+  if (normalized === 'zh-cn' || normalized === 'zh') return 'zh';
+  if (normalized.startsWith('en')) return 'en';
+  return normalized.split('-')[0];
+}
+
+function detectTextLanguage(text) {
+  return /[\u4e00-\u9fa5]/.test(String(text || '')) ? 'zh-CN' : 'en';
+}
+
+function repoPrimaryName(repo) {
+  return (repo.full_name || '').split('/').pop() || repo.full_name || '';
+}
+
+function resolveRepoFieldFromBase(repo, fieldName, targetLang) {
+  const locale = normalizeLocale(targetLang);
+  if (fieldName === 'name') {
+    const original = repoPrimaryName(repo);
+    const translated = repo.translated_name || '';
+    const originalLang = detectTextLanguage(original);
+    if (locale === 'zh-CN') return originalLang === 'zh-CN' ? original : (translated || original);
+    if (locale === 'en') return originalLang === 'en' ? original : (translated || original);
+    return '';
+  }
+
+  if (fieldName === 'description') {
+    const original = repo.description || '';
+    const translated = repo.translated_desc || '';
+    const originalLang = detectTextLanguage(original);
+    if (locale === 'zh-CN') return originalLang === 'zh-CN' ? original : (translated || original);
+    if (locale === 'en') return originalLang === 'en' ? original : (translated || original);
+    return '';
+  }
+
+  if (fieldName === 'project_insight') {
+    const original = repo.project_insight || '';
+    const originalLang = detectTextLanguage(original);
+    if (locale === originalLang) return original;
+    return '';
+  }
+
+  return '';
+}
+
+function repoFieldSourceText(repo, fieldName) {
+  if (fieldName === 'name') return repoPrimaryName(repo);
+  if (fieldName === 'description') return repo.description || repo.translated_desc || '';
+  if (fieldName === 'project_insight') return repo.project_insight || '';
+  return '';
+}
+
+async function getLocalizedRepoField(db, repo, fieldName, targetLang) {
+  const locale = normalizeLocale(targetLang);
+  const fromBase = resolveRepoFieldFromBase(repo, fieldName, locale);
+  if (fromBase) {
+    const existing = await getRepoFieldTranslation(db, repo, fieldName, locale);
+    if (existing !== fromBase) {
+      await saveRepoFieldTranslation(db, repo, fieldName, locale, fromBase, repoFieldSourceText(repo, fieldName), detectTextLanguage(repoFieldSourceText(repo, fieldName)));
+    }
+    return fromBase;
+  }
+
+  const cached = await getRepoFieldTranslation(db, repo, fieldName, locale);
+  if (cached) return cached;
+
+  const sourceText = repoFieldSourceText(repo, fieldName);
+  if (!sourceText) return '';
+
+  const translated = await translateText(db, sourceText, locale);
+  if (translated) {
+    await saveRepoFieldTranslation(db, repo, fieldName, locale, translated, sourceText, detectTextLanguage(sourceText));
+    return translated;
+  }
+
+  return sourceText;
+}
+
+async function getLocalizedRepoContent(db, repo, targetLang, fields = ['name', 'description', 'project_insight']) {
+  const result = {};
+  for (const fieldName of fields) {
+    result[fieldName] = await getLocalizedRepoField(db, repo, fieldName, targetLang);
+  }
+  return result;
 }
 
 async function getAllRepoNames(db, limit = 1000) {
@@ -1010,7 +1227,7 @@ async function apiRepos(request, env) {
   const perPage   = Math.min(parseIntParam(q.get('per_page'), 20), 100);
   const lang      = q.get('lang')   || '';
   const search    = q.get('search') || '';
-  const crawlDate = q.get('date')   || null;
+  const crawlDate = q.get('date')   || await getLatestDate(env.DB, category);
 
   const result = await queryRepos(env.DB, { category, crawlDate, page, perPage, lang, search });
   return json(result);
@@ -1098,19 +1315,33 @@ const EZOIC_HEAD_SNIPPET=`
 `;
 
 function baseLayout(title, bodyContent, options = {}) {
+  const locale = normalizeLocale(options.locale || DEFAULT_LOCALE);
+  const langPrefix = options.langPrefix || '';
   const description = options.description || SITE_DESCRIPTION;
   const canonicalUrl = options.canonicalUrl || '';
   const robots = options.robots || '';
   const ogType = options.ogType || 'website';
   const extraHead = options.extraHead || '';
+  const currentPath = options.currentPath || '/';
+  const alternatePath = options.alternatePath || currentPath;
+  const nav = layoutText(locale);
+  const localeLinks = Object.values(LOCALES).map(l => {
+    const active = l.code === locale ? ' active' : '';
+    return `<a class="lang-link${active}" href="${localizedPath(l.code, alternatePath)}" hreflang="${escHtml(l.code)}" data-locale="${escHtml(l.code)}">${escHtml(l.shortLabel)}</a>`;
+  }).join('');
+  const alternates = Object.values(LOCALES).map(l =>
+    `<link rel="alternate" hreflang="${escHtml(l.code)}" href="${escHtml(routeUrl(options.env || {}, alternatePath, l.code))}"/>`
+  ).join('\n  ');
   return `<!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="${escHtml(locale)}">
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
   <title>${escHtml(title)}</title>
   <meta name="description" content="${escHtml(description)}"/>
   ${canonicalUrl ? `<link rel="canonical" href="${escHtml(canonicalUrl)}"/>` : ''}
+  ${alternates}
+  <link rel="alternate" hreflang="x-default" href="${escHtml(routeUrl(options.env || {}, alternatePath, DEFAULT_LOCALE))}"/>
   ${robots ? `<meta name="robots" content="${escHtml(robots)}"/>` : ''}
   <meta property="og:site_name" content="${SITE_NAME}"/>
   <meta property="og:title" content="${escHtml(title)}"/>
@@ -1129,23 +1360,61 @@ ${EZOIC_HEAD_SNIPPET}
 </head>
 <body>
   <nav class="navbar">
-    <a class="brand" href="/">🔥 HotGit</a>
+    <a class="brand" href="${routePath('/', langPrefix)}">🔥 HotGit</a>
     <ul class="nav-links">
-      <li><a href="/">首页</a></li>
-      <li><a href="/repos?category=top_stars">⭐ Star 榜</a></li>
-      <li><a href="/repos?category=top_forks">🍴 Fork 榜</a></li>
-      <li><a href="/repos?category=star_daily">📈 日增</a></li>
-      <li><a href="/repos?category=star_weekly">📅 周增</a></li>
-      <li><a href="/repos?category=star_monthly">🗓️ 月增</a></li>
-      <li><a href="/about">关于</a></li>
+      <li><a href="${routePath('/', langPrefix)}">${nav.home}</a></li>
+      <li><a href="${routePath('/repos?category=top_stars', langPrefix)}">${nav.topStars}</a></li>
+      <li><a href="${routePath('/repos?category=top_forks', langPrefix)}">${nav.topForks}</a></li>
+      <li><a href="${routePath('/repos?category=star_daily', langPrefix)}">${nav.daily}</a></li>
+      <li><a href="${routePath('/repos?category=star_weekly', langPrefix)}">${nav.weekly}</a></li>
+      <li><a href="${routePath('/repos?category=star_monthly', langPrefix)}">${nav.monthly}</a></li>
+      <li><a href="${routePath('/about', langPrefix)}">${nav.about}</a></li>
     </ul>
+    <div class="lang-switch" aria-label="${escHtml(nav.language)}">${localeLinks}</div>
   </nav>
   <main class="container">${bodyContent}</main>
   <footer class="footer">
-    <p>HotGit — GitHub 热门仓库追踪 · 数据每日 04:00 CST 自动更新 · Powered by Cloudflare Workers</p>
+    <p>${nav.footer}</p>
   </footer>
+  <script>
+    document.querySelectorAll('[data-locale]').forEach(function(link) {
+      link.addEventListener('click', function() {
+        try {
+          localStorage.setItem('${LOCALE_COOKIE}', link.dataset.locale);
+          document.cookie = '${LOCALE_COOKIE}=' + encodeURIComponent(link.dataset.locale) + '; Path=/; Max-Age=31536000; SameSite=Lax; Secure';
+        } catch (e) {}
+      });
+    });
+  </script>
 </body>
 </html>`;
+}
+
+function layoutText(locale) {
+  if (locale === 'en') {
+    return {
+      home: 'Home',
+      topStars: '⭐ Stars',
+      topForks: '🍴 Forks',
+      daily: '📈 Daily',
+      weekly: '📅 Weekly',
+      monthly: '🗓️ Monthly',
+      about: 'About',
+      language: 'Language',
+      footer: 'HotGit — GitHub trending repositories tracker · Data updates daily at 04:00 CST · Powered by Cloudflare Workers',
+    };
+  }
+  return {
+    home: '首页',
+    topStars: '⭐ Star 榜',
+    topForks: '🍴 Fork 榜',
+    daily: '📈 日增',
+    weekly: '📅 周增',
+    monthly: '🗓️ 月增',
+    about: '关于',
+    language: '语言',
+    footer: 'HotGit — GitHub 热门仓库追踪 · 数据每日 04:00 CST 自动更新 · Powered by Cloudflare Workers',
+  };
 }
 
 function siteUrl(env, path = '/') {
@@ -1156,16 +1425,16 @@ function jsonLdScript(data) {
   return `<script type="application/ld+json">${JSON.stringify(data).replace(/</g, '\\u003c')}</script>`;
 }
 
-function wechatPromoBlock(variant = 'default') {
+function wechatPromoBlock(variant = 'default', locale = DEFAULT_LOCALE) {
   const titleId = `wechat-promo-title-${variant}`;
   return `
   <section class="wechat-promo wechat-promo-${variant}" aria-labelledby="${titleId}">
     <table class="wechat-promo-table" role="presentation">
       <tr>
         <td class="wechat-promo-copy">
-          <p class="promo-eyebrow">公众号同步更新</p>
-          <h2 id="${titleId}">搜索关注【项目值得看】公众号，第一时间发现热门开源项目</h2>
-          <p>每日热门项目资讯、增长趋势观察和深度解读会同步到公众号，适合通勤、碎片时间快速浏览。</p>
+          <p class="promo-eyebrow">${tr(locale, '公众号同步更新', 'WeChat updates')}</p>
+          <h2 id="${titleId}">${tr(locale, '搜索关注【项目值得看】公众号，第一时间发现热门开源项目', 'Follow the Project Worth Watching WeChat account for daily open-source picks')}</h2>
+          <p>${tr(locale, '每日热门项目资讯、增长趋势观察和深度解读会同步到公众号，适合通勤、碎片时间快速浏览。', 'Daily project highlights, growth observations, and deeper reads are also published on WeChat for quick reading.')}</p>
         </td>
         <td class="wechat-promo-media">
           <img class="wechat-promo-img" src="/static/img/wechat-promo.png" alt="${WECHAT_PROMO_ALT}" height="132" loading="lazy" decoding="async"/>
@@ -1200,6 +1469,26 @@ function buildProjectInsight(repo, history = [], readmeText = '', homepageMeta =
     `${sourceHint}${repo.full_name} 值得先看的一点，是它围绕${focus}在解决问题${topicText}，主要使用 ${language}。${descriptionHint}${readmeHint}${homepageHint}` +
     `我会把它放进观察清单，不是因为 Star 数本身，而是因为它的方向和最近热度有交集：${heat}；${activityHint}${growthHint}如果后面几天还能继续增长，同时 Issue、PR、提交记录也比较活跃，说明它可能不只是短时间被转发了一波，而是确实踩中了开发者近期的需求。` +
     `它更适合${audience}，尤其是正在做技术选型、找替代方案、观察新方向，或者想快速判断某类工具是否值得投入时间的人。真正要落地时，我建议先看四件事：README 的示例是不是清楚，安装和接入成本高不高，许可证是否适合自己的使用场景，维护者对问题反馈和版本发布是否稳定。整体来看，这类项目适合作为趋势观察样本，也适合在周末或碎片时间进一步读源码、看 demo、对比同类方案。`
+  );
+}
+
+function buildEnglishProjectInsight(repo, history = []) {
+  const topics = (repo.topics || '').split(',').map(t => t.trim()).filter(Boolean).slice(0, 4);
+  const latest = history[history.length - 1];
+  const previous = history.length > 1 ? history[history.length - 2] : null;
+  const dailyGain = latest && previous ? Math.max(latest.stars - previous.stars, 0) : null;
+  const language = repo.language && repo.language !== 'Unknown' ? repo.language : 'multiple languages';
+  const topicText = topics.length ? ` Its main tags include ${topics.join(', ')}.` : '';
+  const description = repo.description || repo.translated_desc || '';
+  const descriptionText = description ? ` The project description says: "${trimInsightFragment(description, 140)}".` : '';
+  const updateText = repo.pushed_at ? ` It was last updated on ${repo.pushed_at.slice(0, 10)}.` : '';
+  const growthText = dailyGain !== null
+    ? ` Compared with the previous snapshot, it gained about ${fmtNum(dailyGain)} stars.`
+    : ' The current dataset does not yet include enough history to judge whether the growth is stable.';
+
+  return trimInsight(
+    `${repo.full_name} is worth watching as a ${language} project with ${fmtNum(repo.stars)} stars and ${fmtNum(repo.forks)} forks.${topicText}${descriptionText}` +
+    `${updateText}${growthText} It is a useful candidate for developers who are comparing tools, tracking open-source trends, or looking for practical examples in this area. Before adopting it, review the README examples, integration cost, license, issue activity, and release cadence.`
   );
 }
 
@@ -1259,40 +1548,50 @@ function trimInsight(text) {
   return String(text || '').replace(/\s+/g, ' ').trim();
 }
 
-async function pageIndex(env) {
+async function pageIndex(env, locale = DEFAULT_LOCALE, langPrefix = '') {
   const stats = await getStats(env.DB);
   const dates = await getCrawlDates(env.DB);
-  const canonicalUrl = siteUrl(env, '/');
-  const pageDescription = 'HotGit 每天自动追踪 GitHub Star、Fork、日增、周增、月增榜单，帮助开发者及时发现增长快、有潜力的开源项目。';
+  const canonicalUrl = langPrefix ? siteUrl(env, routePath('/', langPrefix)) : siteUrl(env, '/');
+  const pageDescription = tr(
+    locale,
+    'HotGit 每天自动追踪 GitHub Star、Fork、日增、周增、月增榜单，帮助开发者及时发现增长快、有潜力的开源项目。',
+    'HotGit tracks GitHub Stars, Forks, daily growth, weekly growth, and monthly growth so developers can discover fast-growing open-source projects.'
+  );
+  const labels = categoryLabels(locale);
 
-  const catCards = Object.entries(CATEGORY_LABELS).map(([cat, lbl]) => {
+  const catCards = Object.entries(labels).map(([cat, lbl]) => {
     const cnt = stats.categories?.[cat];
     return `
-    <a class="stat-card" href="/repos?category=${cat}">
+    <a class="stat-card" href="${routePath(`/repos?category=${cat}`, langPrefix)}">
       <div class="stat-icon">${lbl.split(' ')[0]}</div>
       <div class="stat-label">${lbl.replace(/^[^\s]+\s/, '')}</div>
-      <div class="stat-count">${cnt ? cnt + ' 个项目' : '暂无数据'}</div>
-      <div class="stat-action">查看榜单 →</div>
+      <div class="stat-count">${cnt ? tr(locale, `${cnt} 个项目`, `${cnt} repositories`) : tr(locale, '暂无数据', 'No data yet')}</div>
+      <div class="stat-action">${tr(locale, '查看榜单', 'View ranking')} →</div>
     </a>`;
   }).join('');
 
   const dateList = dates.slice(0, 10).map(d =>
-    `<li><a href="/repos?date=${d}">${d}</a></li>`
+    `<li><a href="${routePath(`/repos?date=${d}`, langPrefix)}">${d}</a></li>`
   ).join('');
 
   const body = `
   <section class="hero">
-    <h1>🔥 GitHub 热门仓库追踪</h1>
-    <p class="hero-sub">每天自动爬取 GitHub，分析 Star / Fork / 增量排行，帮你找到最值得关注的开源项目</p>
+    <h1>${tr(locale, '🔥 GitHub 热门仓库追踪', '🔥 GitHub Trending Repository Tracker')}</h1>
+    <p class="hero-sub">${tr(locale, '每天自动爬取 GitHub，分析 Star / Fork / 增量排行，帮你找到最值得关注的开源项目', 'Daily GitHub ranking analysis for Stars, Forks, and growth signals, built to help you find open-source projects worth watching.')}</p>
     ${stats.date
-      ? `<p class="hero-date">最新数据：${stats.date}</p>`
-      : `<p class="hero-date warning">暂无数据，请访问 <a href="/forceupdate">/forceupdate</a> 立即更新</p>`}
+      ? `<p class="hero-date">${tr(locale, '最新数据：', 'Latest data: ')}${stats.date}</p>`
+      : `<p class="hero-date warning">${tr(locale, '暂无数据，请访问', 'No data yet. Visit')} <a href="/forceupdate">/forceupdate</a> ${tr(locale, '立即更新', 'to update now')}</p>`}
   </section>
   <section class="stats-grid">${catCards}</section>
-  ${dates.length ? `<section class="history"><h2>历史数据</h2><ul class="date-list">${dateList}</ul></section>` : ''}
-  ${wechatPromoBlock('home')}`;
+  ${dates.length ? `<section class="history"><h2>${tr(locale, '历史数据', 'Historical snapshots')}</h2><ul class="date-list">${dateList}</ul></section>` : ''}
+  ${wechatPromoBlock('home', locale)}`;
 
-  return html(baseLayout('HotGit — GitHub 热门仓库追踪', body, {
+  return html(baseLayout(tr(locale, 'HotGit — GitHub 热门仓库追踪', 'HotGit — GitHub Trending Repository Tracker'), body, {
+    env,
+    locale,
+    langPrefix,
+    currentPath: '/',
+    alternatePath: '/',
     description: pageDescription,
     canonicalUrl,
     extraHead: jsonLdScript({
@@ -1301,24 +1600,75 @@ async function pageIndex(env) {
       name: SITE_NAME,
       url: canonicalUrl,
       description: pageDescription,
-      inLanguage: 'zh-CN',
+      inLanguage: locale,
       potentialAction: {
         '@type': 'SearchAction',
-        target: `${siteUrl(env, '/repos')}?search={search_term_string}`,
+        target: `${siteUrl(env, routePath('/repos', langPrefix))}?search={search_term_string}`,
         'query-input': 'required name=search_term_string'
       }
     })
   }));
 }
 
-async function pageAbout(env) {
-  const canonicalUrl = siteUrl(env, '/about');
-  const pageDescription = '关于 HotGit：了解 HotGit 如何追踪 GitHub 热门仓库、Star 增长趋势、开源项目潜力榜，并为开发者和 AI 搜索提供可引用的开源趋势内容。';
-  const categoryLinks = Object.entries(CATEGORY_LABELS).map(([category, label]) => `
-    <li><a href="/repos?category=${category}">${escHtml(label)}</a>：追踪 ${escHtml(label.replace(/^[^\s]+\s/, ''))} 中值得关注的开源项目。</li>
+async function pageAbout(env, locale = DEFAULT_LOCALE, langPrefix = '') {
+  const canonicalUrl = langPrefix ? siteUrl(env, routePath('/about', langPrefix)) : siteUrl(env, '/about');
+  const pageDescription = tr(
+    locale,
+    '关于 HotGit：了解 HotGit 如何追踪 GitHub 热门仓库、Star 增长趋势、开源项目潜力榜，并为开发者和 AI 搜索提供可引用的开源趋势内容。',
+    'About HotGit: learn how HotGit tracks GitHub trending repositories, Star growth, and open-source project signals for developers and AI search.'
+  );
+  const labels = categoryLabels(locale);
+  const categoryLinks = Object.entries(labels).map(([category, label]) => `
+    <li><a href="${routePath(`/repos?category=${category}`, langPrefix)}">${escHtml(label)}</a>：${tr(locale, `追踪 ${escHtml(label.replace(/^[^\s]+\s/, ''))} 中值得关注的开源项目。`, `Discover open-source projects worth watching in ${escHtml(label.replace(/^[^\s]+\s/, ''))}.`)}</li>
   `).join('');
 
-  const body = `
+  const body = locale === 'en' ? `
+  <article class="about-page">
+    <header class="about-hero">
+      <p class="about-kicker">About HotGit</p>
+      <h1>About HotGit: a GitHub trending repositories and open-source discovery tracker</h1>
+      <p>HotGit organizes GitHub trending repositories, Star growth, Fork signals, and project momentum so developers, engineering teams, indie builders, and AI search tools can understand which projects are getting attention and why they may be worth a closer look.</p>
+    </header>
+
+    <section class="about-section">
+      <h2>What HotGit Does</h2>
+      <p>HotGit is an open-source project discovery and trend observation site. It focuses on public GitHub signals including Stars, Forks, Issues, recent updates, programming language, Topics, project homepages, and historical growth.</p>
+      <p>Instead of only showing what is temporarily trending, HotGit combines overall rankings, growth rankings, and project detail pages so readers can move from “what is popular today” to “what problem does this solve, who is it for, and should I spend time evaluating it?”</p>
+    </section>
+
+    <section class="about-section">
+      <h2>Tracked Rankings</h2>
+      <ul class="about-list">${categoryLinks}</ul>
+    </section>
+
+    <section class="about-section">
+      <h2>How Content Is Updated</h2>
+      <p>HotGit runs on Cloudflare Workers and D1. It syncs public GitHub ranking data every day. Project detail pages combine repository descriptions, README summaries, project homepage metadata, Topics, programming language, Star/Fork counts, recent update time, and historical growth signals.</p>
+      <p>The content is not an endorsement of project quality. Treat it as a pre-selection note for technical evaluation: read the README, check the license, test the demo, compare alternatives, inspect Issues, and review release activity before adopting anything in production.</p>
+    </section>
+
+    <section class="about-grid" aria-label="Who HotGit is for">
+      <div class="about-card"><h2>Developers</h2><p>Find frameworks, libraries, CLIs, AI tools, databases, DevOps tools, and frontend components with less manual filtering.</p></div>
+      <div class="about-card"><h2>Engineering Teams</h2><p>Use HotGit for technology evaluation, competitor tracking, open-source alternative research, and weekly engineering updates.</p></div>
+      <div class="about-card"><h2>AI Search</h2><p>Clear page structure, FAQ content, Schema, sitemap, and llms.txt make HotGit easier for AI tools to understand and cite.</p></div>
+    </section>
+
+    <section class="about-section">
+      <h2>SEO and GEO Readiness</h2>
+      <p>HotGit pages are organized around clear search and citation questions: what the repository is, why it is worth watching, who it is for, related projects, and when the data was updated. Major pages include canonical links, meta descriptions, Open Graph, Twitter Card metadata, hreflang alternates, and JSON-LD structured data.</p>
+      <p>The site also provides <a href="${routePath('/sitemap.xml', langPrefix)}">sitemap.xml</a>, <a href="/robots.txt">robots.txt</a>, and <a href="${routePath('/llms.txt', langPrefix)}">llms.txt</a>. AI tools should cite the specific project detail page and preserve the original GitHub repository link.</p>
+    </section>
+
+    <section class="about-section faq-section">
+      <h2>FAQ</h2>
+      <details open><summary>Where does HotGit data come from?</summary><p>HotGit uses public GitHub data and public repository page information, including repository descriptions, Stars, Forks, Issues, languages, Topics, README text, and homepage summaries.</p></details>
+      <details><summary>How often is HotGit updated?</summary><p>The site updates daily at 04:00 CST and shows the latest data date on ranking pages.</p></details>
+      <details><summary>Is a project observation a recommendation?</summary><p>No. It explains direction, momentum, and likely use cases. Before adoption, review license, maintenance status, security risk, Issue response, and release history.</p></details>
+      <details><summary>Can AI tools cite HotGit?</summary><p>Yes. Cite concrete project detail pages or ranking pages, and keep the original GitHub repository link when referencing a project.</p></details>
+    </section>
+
+    ${wechatPromoBlock('about', locale)}
+  </article>` : `
   <article class="about-page">
     <header class="about-hero">
       <p class="about-kicker">About HotGit</p>
@@ -1363,7 +1713,7 @@ async function pageAbout(env) {
     <section class="about-section">
       <h2>为什么 HotGit 对 SEO 和 GEO 友好</h2>
       <p>HotGit 的页面围绕明确的问题组织：热门仓库是什么、项目为什么值得关注、适合哪些开发者、有哪些同类项目、数据更新到哪一天。每个主要页面都提供 canonical、meta description、Open Graph、Twitter Card 和 JSON-LD 结构化数据，降低搜索引擎和 AI 摘要工具理解页面主题的成本。</p>
-      <p>站点还提供 <a href="/sitemap.xml">sitemap.xml</a>、<a href="/robots.txt">robots.txt</a> 和 <a href="/llms.txt">llms.txt</a>。AI 工具引用 HotGit 内容时，建议优先链接到具体项目详情页，并同时保留原始 GitHub 仓库链接。</p>
+      <p>站点还提供 <a href="${routePath('/sitemap.xml', langPrefix)}">sitemap.xml</a>、<a href="/robots.txt">robots.txt</a> 和 <a href="${routePath('/llms.txt', langPrefix)}">llms.txt</a>。AI 工具引用 HotGit 内容时，建议优先链接到具体项目详情页，并同时保留原始 GitHub 仓库链接。</p>
     </section>
 
     <section class="about-section faq-section">
@@ -1386,10 +1736,15 @@ async function pageAbout(env) {
       </details>
     </section>
 
-    ${wechatPromoBlock('about')}
+    ${wechatPromoBlock('about', locale)}
   </article>`;
 
-  return html(baseLayout('关于 HotGit — GitHub 热门仓库与开源趋势追踪', body, {
+  return html(baseLayout(tr(locale, '关于 HotGit — GitHub 热门仓库与开源趋势追踪', 'About HotGit — GitHub Trending Repositories and Open-Source Discovery'), body, {
+    env,
+    locale,
+    langPrefix,
+    currentPath: '/about',
+    alternatePath: '/about',
     description: pageDescription,
     canonicalUrl,
     extraHead: jsonLdScript({
@@ -1401,11 +1756,11 @@ async function pageAbout(env) {
           url: canonicalUrl,
           name: '关于 HotGit',
           description: pageDescription,
-          inLanguage: 'zh-CN',
+          inLanguage: locale,
           isPartOf: {
             '@type': 'WebSite',
             name: SITE_NAME,
-            url: siteUrl(env, '/')
+            url: routeUrl(env, '/', locale)
           },
           about: {
             '@type': 'Thing',
@@ -1414,9 +1769,9 @@ async function pageAbout(env) {
         },
         {
           '@type': 'Organization',
-          '@id': `${siteUrl(env, '/')}#organization`,
+          '@id': `${routeUrl(env, '/', locale)}#organization`,
           name: SITE_NAME,
-          url: siteUrl(env, '/'),
+          url: routeUrl(env, '/', locale),
           description: SITE_DESCRIPTION
         },
         {
@@ -1450,7 +1805,7 @@ async function pageAbout(env) {
   }));
 }
 
-async function pageRepos(request, env) {
+async function pageRepos(request, env, locale = DEFAULT_LOCALE, langPrefix = '') {
   const q         = new URL(request.url).searchParams;
   const requestedCategory = q.get('category') || 'top_stars';
   const category  = CATEGORY_LABELS[requestedCategory] ? requestedCategory : 'top_stars';
@@ -1461,17 +1816,23 @@ async function pageRepos(request, env) {
   const crawlDate = q.get('date')   || await getLatestDate(env.DB, category);
   const canonicalParams = new URLSearchParams({ category });
   if (crawlDate) canonicalParams.set('date', crawlDate);
-  const canonicalUrl = siteUrl(env, `/repos?${canonicalParams.toString()}`);
+  const currentListPath = `/repos?${canonicalParams.toString()}`;
+  const canonicalUrl = siteUrl(env, routePath(currentListPath, langPrefix));
   const shouldNoIndex = Boolean(search || lang || page > 1 || perPage !== 20 || requestedCategory !== category);
-  const pageDescription = `${CATEGORY_LABELS[category]}：查看 ${crawlDate || '最新'} GitHub 热门仓库榜单，跟踪项目 Star、Fork、语言、主题和增长趋势。`;
+  const labels = categoryLabels(locale);
+  const pageDescription = tr(
+    locale,
+    `${labels[category]}：查看 ${crawlDate || '最新'} GitHub 热门仓库榜单，跟踪项目 Star、Fork、语言、主题和增长趋势。`,
+    `${labels[category]}: view ${crawlDate || 'latest'} GitHub repository rankings with Stars, Forks, language, topics, and growth signals.`
+  );
 
   const result  = await queryRepos(env.DB, { category, crawlDate, page, perPage, lang, search });
   const langs   = await getLanguages(env.DB, category, crawlDate);
   const dates   = await getCrawlDates(env.DB, category);
 
   // Tab 栏
-  const tabs = Object.entries(CATEGORY_LABELS).map(([cat, lbl]) =>
-    `<a class="tab${cat === category ? ' active' : ''}" href="/repos?category=${cat}">${lbl}</a>`
+  const tabs = Object.entries(labels).map(([cat, lbl]) =>
+    `<a class="tab${cat === category ? ' active' : ''}" href="${routePath(`/repos?category=${cat}`, langPrefix)}">${lbl}</a>`
   ).join('');
 
   // 筛选栏
@@ -1482,13 +1843,14 @@ async function pageRepos(request, env) {
     `<option value="${d}"${d === crawlDate ? ' selected' : ''}>${d}</option>`
   ).join('');
   const perPageOptions = [10,20,50,100].map(n =>
-    `<option value="${n}"${n === perPage ? ' selected' : ''}>每页 ${n} 条</option>`
+    `<option value="${n}"${n === perPage ? ' selected' : ''}>${tr(locale, `每页 ${n} 条`, `${n} per page`)}</option>`
   ).join('');
 
   const isIncrement = ['star_daily', 'star_weekly', 'star_monthly'].includes(category);
 
   // 仓库卡片
-  const cards = result.data.map(repo => {
+  const cards = (await Promise.all(result.data.map(async repo => {
+    const localizedRepo = await getLocalizedRepoContent(env.DB, repo, locale, ['name', 'description']);
     const langBadge = repo.language && repo.language !== 'Unknown'
       ? `<span class="lang-badge lang-${repo.language.toLowerCase().replace(/\s+/g,'-')}">${escHtml(repo.language)}</span>`
       : '';
@@ -1512,8 +1874,8 @@ async function pageRepos(request, env) {
     }
     
     const nameUrl = encodeURIComponent(repo.full_name);
-    const repoDetailUrl = `/repo/${nameUrl}`;
-    const repoIdUrl = `/r/${repo.id}`;
+    const repoDetailUrl = routePath(`/repo/${nameUrl}`, langPrefix);
+    const repoIdUrl = routePath(`/r/${repo.id}`, langPrefix);
     return `
     <div class="repo-card">
       <div class="repo-rank">#${repo.rank}</div>
@@ -1522,77 +1884,82 @@ async function pageRepos(request, env) {
           <a class="repo-name" href="${repoIdUrl}">${escHtml(repo.full_name)}</a>
           ${langBadge}
         </div>
-        ${repo.description ? `<p class="repo-desc">${escHtml(repo.description)}</p>` : ''}
+        ${localizedRepo.description ? `<p class="repo-desc">${escHtml(localizedRepo.description)}</p>` : ''}
         ${topics ? `<div class="repo-topics">${topics}</div>` : ''}
         <div class="repo-meta">
           ${starsDisplay}
           ${forksDisplay}
           <span>🐛 ${repo.open_issues}</span>
           <span>🕐 ${pushedDate}</span>
-          ${repo.homepage ? `<a class="meta-link" href="${escHtml(repo.homepage)}" target="_blank" rel="noopener">🌐 主页</a>` : ''}
+          ${repo.homepage ? `<a class="meta-link" href="${escHtml(repo.homepage)}" target="_blank" rel="noopener">🌐 ${tr(locale, '主页', 'Website')}</a>` : ''}
           <a class="meta-link" href="${escHtml(repo.html_url)}" target="_blank" rel="noopener">🔗 GitHub</a>
         </div>
       </div>
     </div>`;
-  }).join('');
+  }))).join('');
 
   // 分页
   const totalPages = result.total > 0 ? Math.ceil(result.total / perPage) : 1;
-  const makePageUrl = p => `/repos?category=${category}&page=${p}&per_page=${perPage}&lang=${encodeURIComponent(lang)}&search=${encodeURIComponent(search)}&date=${crawlDate||''}`;
+  const makePageUrl = p => routePath(`/repos?category=${category}&page=${p}&per_page=${perPage}&lang=${encodeURIComponent(lang)}&search=${encodeURIComponent(search)}&date=${crawlDate||''}`, langPrefix);
   let pagination = '';
   if (totalPages > 1) {
     const pageLinks = [];
-    if (page > 1) pageLinks.push(`<a class="page-btn" href="${makePageUrl(page-1)}">‹ 上一页</a>`);
+    if (page > 1) pageLinks.push(`<a class="page-btn" href="${makePageUrl(page-1)}">‹ ${tr(locale, '上一页', 'Previous')}</a>`);
     const start = Math.max(1, page - 3), end = Math.min(totalPages, page + 3);
     for (let p = start; p <= end; p++) {
       pageLinks.push(p === page
         ? `<span class="page-btn active">${p}</span>`
         : `<a class="page-btn" href="${makePageUrl(p)}">${p}</a>`);
     }
-    if (page < totalPages) pageLinks.push(`<a class="page-btn" href="${makePageUrl(page+1)}">下一页 ›</a>`);
-    pageLinks.push(`<span class="page-info">共 ${result.total} 条 / ${totalPages} 页</span>`);
+    if (page < totalPages) pageLinks.push(`<a class="page-btn" href="${makePageUrl(page+1)}">${tr(locale, '下一页', 'Next')} ›</a>`);
+    pageLinks.push(`<span class="page-info">${tr(locale, `共 ${result.total} 条 / ${totalPages} 页`, `${result.total} items / ${totalPages} pages`)}</span>`);
     pagination = `<nav class="pagination">${pageLinks.join('')}</nav>`;
   }
 
   const emptyState = result.data.length === 0
-    ? `<div class="empty-state"><p>暂无数据，请访问 <a href="/forceupdate">/forceupdate</a> 立即更新。</p><a class="btn btn-primary" href="/forceupdate">立即更新数据</a></div>`
+    ? `<div class="empty-state"><p>${tr(locale, '暂无数据，请访问', 'No data yet. Visit')} <a href="/forceupdate">/forceupdate</a> ${tr(locale, '立即更新。', 'to update now.')}</p><a class="btn btn-primary" href="/forceupdate">${tr(locale, '立即更新数据', 'Update data')}</a></div>`
     : '';
 
   const body = `
   <div class="repos-header">
-    <h1>${CATEGORY_LABELS[category] || category}</h1>
-    ${crawlDate ? `<p class="data-date">数据日期：${crawlDate}</p>` : ''}
+    <h1>${labels[category] || category}</h1>
+    ${crawlDate ? `<p class="data-date">${tr(locale, '数据日期：', 'Data date: ')}${crawlDate}</p>` : ''}
   </div>
-  <form class="filter-bar" method="get" action="/repos">
+  <form class="filter-bar" method="get" action="${routePath('/repos', langPrefix)}">
     <input type="hidden" name="category" value="${category}"/>
-    <input class="input-search" type="text" name="search" placeholder="搜索项目名/描述…" value="${escHtml(search)}"/>
-    <select name="lang" class="select-lang"><option value="">全部语言</option>${langOptions}</select>
+    <input class="input-search" type="text" name="search" placeholder="${tr(locale, '搜索项目名/描述…', 'Search name or description...')}" value="${escHtml(search)}"/>
+    <select name="lang" class="select-lang"><option value="">${tr(locale, '全部语言', 'All languages')}</option>${langOptions}</select>
     <select name="per_page" class="select-per-page">${perPageOptions}</select>
     <select name="date" class="select-date">${dateOptions}</select>
-    <button class="btn btn-primary" type="submit">筛选</button>
-    <a class="btn btn-ghost" href="/repos?category=${category}">重置</a>
+    <button class="btn btn-primary" type="submit">${tr(locale, '筛选', 'Filter')}</button>
+    <a class="btn btn-ghost" href="${routePath(`/repos?category=${category}`, langPrefix)}">${tr(locale, '重置', 'Reset')}</a>
   </form>
   <div class="tab-bar">${tabs}</div>
   ${result.data.length ? `<div class="repo-list">${cards}</div>${pagination}` : emptyState}
-  ${wechatPromoBlock('list')}`;
+  ${wechatPromoBlock('list', locale)}`;
 
-  return html(baseLayout(`${CATEGORY_LABELS[category] || category} — HotGit`, body, {
+  return html(baseLayout(`${labels[category] || category} — HotGit`, body, {
+    env,
+    locale,
+    langPrefix,
+    currentPath: currentListPath,
+    alternatePath: currentListPath,
     description: pageDescription,
     canonicalUrl,
     robots: shouldNoIndex ? 'noindex,follow' : '',
     extraHead: jsonLdScript({
       '@context': 'https://schema.org',
       '@type': 'CollectionPage',
-      name: `${CATEGORY_LABELS[category]} — ${SITE_NAME}`,
+      name: `${labels[category]} — ${SITE_NAME}`,
       url: canonicalUrl,
       description: pageDescription,
-      inLanguage: 'zh-CN',
+      inLanguage: locale,
       mainEntity: {
         '@type': 'ItemList',
         itemListElement: result.data.slice(0, 20).map((repo, index) => ({
           '@type': 'ListItem',
           position: (page - 1) * perPage + index + 1,
-          url: siteUrl(env, `/repo/${encodeURIComponent(repo.full_name.split('/')[0])}/${encodeURIComponent(repo.full_name.split('/').slice(1).join('/'))}`),
+          url: siteUrl(env, routePath(`/repo/${encodeURIComponent(repo.full_name.split('/')[0])}/${encodeURIComponent(repo.full_name.split('/').slice(1).join('/'))}`, langPrefix)),
           name: repo.full_name
         }))
       }
@@ -1735,17 +2102,22 @@ async function pageBackfillInsights(request, env) {
   }));
 }
 
-async function pageRepoDetail(env, owner, name) {
+async function pageRepoDetail(env, owner, name, locale = DEFAULT_LOCALE, langPrefix = '') {
   const fullName = `${owner}/${name}`;
   const repo = await getRepoByName(env.DB, fullName);
   
   if (!repo) {
-    return html(baseLayout('仓库未找到 — HotGit', `
+    return html(baseLayout(tr(locale, '仓库未找到 — HotGit', 'Repository Not Found — HotGit'), `
       <section class="empty-state">
-        <h1>仓库未找到</h1>
-        <p>${escHtml(fullName)} 不在热门榜单中。</p>
-        <a class="btn btn-primary" href="/">返回首页</a>
+        <h1>${tr(locale, '仓库未找到', 'Repository Not Found')}</h1>
+        <p>${escHtml(fullName)} ${tr(locale, '不在热门榜单中。', 'is not in the current rankings.')}</p>
+        <a class="btn btn-primary" href="${routePath('/', langPrefix)}">${tr(locale, '返回首页', 'Back Home')}</a>
       </section>`, {
+      env,
+      locale,
+      langPrefix,
+      currentPath: `/repo/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`,
+      alternatePath: `/repo/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`,
       description: `${fullName} 暂未收录在 HotGit 热门榜单中。`,
       robots: 'noindex,follow'
     }), 404);
@@ -1755,16 +2127,25 @@ async function pageRepoDetail(env, owner, name) {
   const related = await getRelatedRepos(env.DB, repo.language, fullName);
   const topicRelated = await getTopicRelatedRepos(env.DB, repo.topics, fullName);
   const crawlDate = await getLatestDate(env.DB);
-  const projectInsight = repo.project_insight || buildProjectInsight(repo, history, '', '');
+  const fallbackProjectInsight = repo.project_insight || buildProjectInsight(repo, history, '', '');
+  const localizedRepo = await getLocalizedRepoContent(env.DB, { ...repo, project_insight: fallbackProjectInsight }, locale, ['name', 'description', 'project_insight']);
+  let projectInsight = localizedRepo.project_insight || fallbackProjectInsight;
+  if (locale === 'en' && detectTextLanguage(projectInsight) === 'zh-CN') {
+    projectInsight = buildEnglishProjectInsight(repo, history);
+    await saveRepoFieldTranslation(env.DB, repo, 'project_insight', 'en', projectInsight, fallbackProjectInsight, 'zh-CN');
+  }
   
   const title = `${repo.full_name} — HotGit`;
   const description = metaDescriptionFromInsight(
     projectInsight,
-    repo.description || `${repo.full_name} - ${repo.language} 项目，⭐ ${fmtNum(repo.stars)} Stars`
+    localizedRepo.description || repo.description || `${repo.full_name} - ${repo.language} 项目，⭐ ${fmtNum(repo.stars)} Stars`
   );
   
   const translatedName = repo.translated_name || '';
-  const translatedDesc = repo.translated_desc || '';
+  const localizedDescription = localizedRepo.description || repo.description || '';
+  const alternateDescription = locale === 'zh-CN'
+    ? (detectTextLanguage(repo.description || '') === 'en' ? repo.description : repo.translated_desc || '')
+    : (detectTextLanguage(repo.description || '') === 'zh-CN' ? repo.description : repo.translated_desc || '');
   
   const repoLink = `
   <div class="repo-detail-header">
@@ -1773,18 +2154,18 @@ async function pageRepoDetail(env, owner, name) {
       ${repo.language && repo.language !== 'Unknown' ? `<span class="lang-badge">${escHtml(repo.language)}</span>` : ''}
     </h1>
     ${translatedName ? `<p class="repo-name-trans">🌐 ${escHtml(translatedName)}</p>` : ''}
-    ${repo.description ? `<p class="repo-desc">${escHtml(repo.description)}</p>` : ''}
-    ${translatedDesc ? `<p class="repo-desc-trans">🌐 ${escHtml(translatedDesc)}</p>` : ''}
+    ${localizedDescription ? `<p class="repo-desc">${escHtml(localizedDescription)}</p>` : ''}
+    ${alternateDescription && alternateDescription !== localizedDescription ? `<p class="repo-desc-trans">🌐 ${escHtml(alternateDescription)}</p>` : ''}
   </div>
   <div class="repo-stats">
     <div class="stat-item"><span class="stat-value">⭐ ${fmtNum(repo.stars)}</span><span class="stat-label">Stars</span></div>
     <div class="stat-item"><span class="stat-value">🍴 ${fmtNum(repo.forks)}</span><span class="stat-label">Forks</span></div>
     <div class="stat-item"><span class="stat-value">🐛 ${repo.open_issues}</span><span class="stat-label">Issues</span></div>
-    <div class="stat-item"><span class="stat-value">🕐 ${repo.pushed_at ? repo.pushed_at.slice(0,10) : '—'}</span><span class="stat-label">最近更新</span></div>
+    <div class="stat-item"><span class="stat-value">🕐 ${repo.pushed_at ? repo.pushed_at.slice(0,10) : '—'}</span><span class="stat-label">${tr(locale, '最近更新', 'Updated')}</span></div>
   </div>
   <div class="repo-links">
     <a class="btn btn-primary" href="${escHtml(repo.html_url)}" target="_blank" rel="noopener">🔗 GitHub</a>
-    ${repo.homepage ? `<a class="btn btn-ghost" href="${escHtml(repo.homepage)}" target="_blank" rel="noopener">🌐 主页</a>` : ''}
+    ${repo.homepage ? `<a class="btn btn-ghost" href="${escHtml(repo.homepage)}" target="_blank" rel="noopener">🌐 ${tr(locale, '主页', 'Website')}</a>` : ''}
   </div>`;
 
   const topicsHtml = repo.topics 
@@ -1793,14 +2174,14 @@ async function pageRepoDetail(env, owner, name) {
 
   const insightHtml = `
     <section class="project-insight" aria-labelledby="project-insight-title">
-      <div class="insight-kicker">项目观察</div>
-      <h2 id="project-insight-title">为什么值得关注</h2>
+      <div class="insight-kicker">${tr(locale, '项目观察', 'Project Insight')}</div>
+      <h2 id="project-insight-title">${tr(locale, '为什么值得关注', 'Why It Is Worth Watching')}</h2>
       <p>${escHtml(projectInsight)}</p>
     </section>`;
 
   const chartHtml = history.length > 0 
     ? `<section class="trend-chart">
-      <h2>📈 趋势变化（${history.length}条数据）</h2>
+      <h2>📈 ${tr(locale, `趋势变化（${history.length}条数据）`, `Trend History (${history.length} points)`)}</h2>
       <div class="chart-container">
         <canvas id="trendChart"></canvas>
       </div>
@@ -1848,8 +2229,8 @@ async function pageRepoDetail(env, owner, name) {
     : '';
 
   const relatedHtml = related.length 
-    ? `<section class="related-repos"><h2>同语言热门项目</h2><div class="repo-list">${related.map(r => `
-      <a class="repo-card" href="/r/${r.id}">
+    ? `<section class="related-repos"><h2>${tr(locale, '同语言热门项目', 'Popular Projects in the Same Language')}</h2><div class="repo-list">${related.map(r => `
+      <a class="repo-card" href="${routePath(`/r/${r.id}`, langPrefix)}">
         <div class="repo-main">
           <div class="repo-title-line"><span class="repo-name">${escHtml(r.full_name)}</span></div>
           <div class="repo-meta"><span>⭐ ${fmtNum(r.stars)}</span><span>🍴 ${fmtNum(r.forks)}</span></div>
@@ -1858,8 +2239,8 @@ async function pageRepoDetail(env, owner, name) {
     : '';
 
   const topicRelatedHtml = topicRelated.length
-    ? `<section class="related-repos topic-related"><h2>同主题相关项目</h2><p class="related-intro">如果你正在调研同类工具，可以继续看看这些项目的实现思路、社区热度和近期增长表现。</p><div class="repo-list">${topicRelated.map(r => `
-      <a class="repo-card" href="/r/${r.id}">
+    ? `<section class="related-repos topic-related"><h2>${tr(locale, '同主题相关项目', 'Related Projects by Topic')}</h2><p class="related-intro">${tr(locale, '如果你正在调研同类工具，可以继续看看这些项目的实现思路、社区热度和近期增长表现。', 'If you are evaluating similar tools, compare implementation direction, community traction, and recent growth signals.')}</p><div class="repo-list">${topicRelated.map(r => `
+      <a class="repo-card" href="${routePath(`/r/${r.id}`, langPrefix)}">
         <div class="repo-main">
           <div class="repo-title-line"><span class="repo-name">${escHtml(r.full_name)}</span>${r.language && r.language !== 'Unknown' ? `<span class="lang-badge">${escHtml(r.language)}</span>` : ''}</div>
           ${r.description ? `<p class="repo-desc">${escHtml(r.description)}</p>` : ''}
@@ -1868,8 +2249,8 @@ async function pageRepoDetail(env, owner, name) {
       </a>`).join('')}</div></section>`
     : '';
 
-  const domain = getDomain(env);
-  const canonicalUrl = `https://${domain}/repo/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`;
+  const detailPath = `/repo/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`;
+  const canonicalUrl = siteUrl(env, routePath(detailPath, langPrefix));
 
   const body = `
   ${repoLink}
@@ -1878,7 +2259,7 @@ async function pageRepoDetail(env, owner, name) {
   ${chartHtml}
   ${topicRelatedHtml}
   ${relatedHtml}
-  ${wechatPromoBlock('detail')}`;
+  ${wechatPromoBlock('detail', locale)}`;
 
   const detailJsonLd = jsonLdScript({
     '@context': 'https://schema.org',
@@ -1904,62 +2285,32 @@ async function pageRepoDetail(env, owner, name) {
     ]
   });
 
-  const htmlContent = `<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-  <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-  <title>${escHtml(title)}</title>
-  <meta name="description" content="${escHtml(description)}"/>
-  <link rel="canonical" href="${escHtml(canonicalUrl)}"/>
-  <meta property="og:site_name" content="${SITE_NAME}"/>
-  <meta property="og:title" content="${escHtml(title)}"/>
-  <meta property="og:description" content="${escHtml(description)}"/>
-  <meta property="og:url" content="${escHtml(canonicalUrl)}"/>
-  <meta property="og:type" content="article"/>
-  <meta name="twitter:card" content="summary"/>
-  <meta name="twitter:title" content="${escHtml(title)}"/>
-  <meta name="twitter:description" content="${escHtml(description)}"/>
-  <link rel="stylesheet" href="/static/css/style.css"/>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔥</text></svg>"/>
-  ${detailJsonLd}
-${ANALYTICS_HEAD_SNIPPET}
-</head>
-<body>
-  <nav class="navbar">
-    <a class="brand" href="/">🔥 HotGit</a>
-    <ul class="nav-links">
-      <li><a href="/">首页</a></li>
-      <li><a href="/repos?category=top_stars">⭐ Star 榜</a></li>
-      <li><a href="/repos?category=top_forks">🍴 Fork 榜</a></li>
-      <li><a href="/repos?category=star_daily">📈 日增</a></li>
-      <li><a href="/repos?category=star_weekly">📅 周增</a></li>
-      <li><a href="/repos?category=star_monthly">🗓️ 月增</a></li>
-      <li><a href="/about">关于</a></li>
-    </ul>
-  </nav>
-  <main class="container">${body}</main>
-  <footer class="footer">
-    <p>HotGit — GitHub 热门仓库追踪 · 数据每日 04:00 CST 自动更新 · Powered by Cloudflare Workers</p>
-  </footer>
-</body>
-</html>`;
-
-  return new Response(htmlContent, {
-    headers: { 'Content-Type': 'text/html; charset=utf-8' }
-  });
+  return html(baseLayout(title, body, {
+    env,
+    locale,
+    langPrefix,
+    currentPath: detailPath,
+    alternatePath: detailPath,
+    description,
+    canonicalUrl,
+    ogType: 'article',
+    extraHead: detailJsonLd
+  }));
 }
 
-async function pageRepoDetailById(env, id) {
+async function pageRepoDetailById(env, id, locale = DEFAULT_LOCALE, langPrefix = '') {
   const repo = await getRepoById(env.DB, id);
   
   if (!repo) {
-    return html(baseLayout('仓库未找到 — HotGit', `
+    return html(baseLayout(tr(locale, '仓库未找到 — HotGit', 'Repository Not Found — HotGit'), `
       <section class="empty-state">
-        <h1>仓库未找到</h1>
-        <p>ID: ${id} 不在热门榜单中。</p>
-        <a class="btn btn-primary" href="/">返回首页</a>
+        <h1>${tr(locale, '仓库未找到', 'Repository Not Found')}</h1>
+        <p>ID: ${id} ${tr(locale, '不在热门榜单中。', 'is not in the current rankings.')}</p>
+        <a class="btn btn-primary" href="${routePath('/', langPrefix)}">${tr(locale, '返回首页', 'Back Home')}</a>
       </section>`, {
+      env,
+      locale,
+      langPrefix,
       description: `ID ${id} 暂未收录在 HotGit 热门榜单中。`,
       robots: 'noindex,follow'
     }), 404);
@@ -1967,14 +2318,15 @@ async function pageRepoDetailById(env, id) {
 
   const [owner, ...nameParts] = repo.full_name.split('/');
   const name = nameParts.join('/');
-  return Response.redirect(siteUrl(env, `/repo/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`), 301);
+  return Response.redirect(siteUrl(env, routePath(`/repo/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`, langPrefix)), 301);
 }
 
-async function pageSitemap(env) {
+async function pageSitemap(env, localeFilter = null) {
   const domain = getDomain(env);
   const host = `https://${domain}`;
   const sitemapRepos = await getSitemapRepos(env.DB);
   const dates = await getCrawlDates(env.DB);
+  const locales = localeFilter ? [normalizeLocale(localeFilter)] : Object.keys(LOCALES);
   const latestDate = dates[0] || '';
   const sitemapEntry = (loc, changefreq, priority, lastmod = latestDate) => `
   <url><loc>${escXml(loc)}</loc>${lastmod ? `<lastmod>${escXml(lastmod)}</lastmod>` : ''}<changefreq>${changefreq}</changefreq><priority>${priority}</priority></url>`;
@@ -1982,21 +2334,43 @@ async function pageSitemap(env) {
   let xml = `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">`;
 
-  xml += sitemapEntry(`${host}/`, 'daily', '1.0');
-  xml += sitemapEntry(`${host}/about`, 'monthly', '0.7');
-  xml += sitemapEntry(`${host}/repos`, 'daily', '0.9');
-  for (const category of Object.keys(CATEGORY_LABELS)) {
-    const freq = category === 'star_monthly' || category === 'star_weekly' ? 'weekly' : 'daily';
-    xml += sitemapEntry(`${host}/repos?category=${encodeURIComponent(category)}`, freq, '0.8');
-  }
-  for (const date of dates.slice(0, 30)) {
-    xml += sitemapEntry(`${host}/repos?date=${encodeURIComponent(date)}`, 'daily', '0.6', date);
+  if (!localeFilter) {
+    xml += sitemapEntry(`${host}/`, 'daily', '1.0');
+    xml += sitemapEntry(`${host}/about`, 'monthly', '0.7');
+    xml += sitemapEntry(`${host}/repos`, 'daily', '0.9');
+    for (const category of Object.keys(CATEGORY_LABELS)) {
+      const freq = category === 'star_monthly' || category === 'star_weekly' ? 'weekly' : 'daily';
+      xml += sitemapEntry(`${host}/repos?category=${encodeURIComponent(category)}`, freq, '0.8');
+    }
+    for (const date of dates.slice(0, 30)) {
+      xml += sitemapEntry(`${host}/repos?date=${encodeURIComponent(date)}`, 'daily', '0.6', date);
+    }
+    for (const sitemapRepo of sitemapRepos) {
+      const [owner, ...repoParts] = sitemapRepo.full_name.split('/');
+      const repo = repoParts.join('/');
+      xml += sitemapEntry(`${host}/repo/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`, 'weekly', '0.7', sitemapRepo.lastmod || latestDate);
+    }
   }
 
-  for (const sitemapRepo of sitemapRepos) {
-    const [owner, ...repoParts] = sitemapRepo.full_name.split('/');
-    const repo = repoParts.join('/');
-    xml += sitemapEntry(`${host}/repo/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`, 'weekly', '0.7', sitemapRepo.lastmod || latestDate);
+  for (const locale of locales) {
+    const prefix = LOCALES[locale].prefix;
+    xml += sitemapEntry(`${host}${prefix}/`, 'daily', '1.0');
+    xml += sitemapEntry(`${host}${prefix}/about`, 'monthly', '0.7');
+    xml += sitemapEntry(`${host}${prefix}/repos`, 'daily', '0.9');
+    xml += sitemapEntry(`${host}${prefix}/llms.txt`, 'monthly', '0.4');
+    for (const category of Object.keys(CATEGORY_LABELS)) {
+      const freq = category === 'star_monthly' || category === 'star_weekly' ? 'weekly' : 'daily';
+      xml += sitemapEntry(`${host}${prefix}/repos?category=${encodeURIComponent(category)}`, freq, '0.8');
+    }
+    for (const date of dates.slice(0, 30)) {
+      xml += sitemapEntry(`${host}${prefix}/repos?date=${encodeURIComponent(date)}`, 'daily', '0.6', date);
+    }
+
+    for (const sitemapRepo of sitemapRepos) {
+      const [owner, ...repoParts] = sitemapRepo.full_name.split('/');
+      const repo = repoParts.join('/');
+      xml += sitemapEntry(`${host}${prefix}/repo/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`, 'weekly', '0.7', sitemapRepo.lastmod || latestDate);
+    }
   }
 
   xml += `
@@ -2016,29 +2390,63 @@ Disallow: /forceupdate
 Disallow: /backfillinsights
 
 Sitemap: https://${domain}/sitemap.xml
+Sitemap: https://${domain}/zh-CN/sitemap.xml
+Sitemap: https://${domain}/en/sitemap.xml
 LLM-Content: https://${domain}/llms.txt
+LLM-Content: https://${domain}/zh-CN/llms.txt
+LLM-Content: https://${domain}/en/llms.txt
 `;
   return new Response(robots, {
     headers: { 'Content-Type': 'text/plain; charset=utf-8' }
   });
 }
 
-function pageLlmsTxt(env) {
+function pageLlmsTxt(env, locale = DEFAULT_LOCALE) {
+  locale = normalizeLocale(locale || DEFAULT_LOCALE);
   const host = `https://${getDomain(env)}`;
+  if (locale === 'en') {
+    const text = `# HotGit
+
+HotGit is a GitHub trending repositories tracker for developers, engineering teams, and open-source observers. The site updates Star rankings, Fork rankings, daily Star growth, weekly Star growth, monthly Star growth, and project detail pages with growth signals, related projects, and original GitHub links.
+
+## AI-citable Pages
+
+- Home: ${host}/en/
+- About HotGit: ${host}/en/about
+- Top Stars: ${host}/en/repos?category=top_stars
+- Top Forks: ${host}/en/repos?category=top_forks
+- Daily Stars: ${host}/en/repos?category=star_daily
+- Weekly Stars: ${host}/en/repos?category=star_weekly
+- Monthly Stars: ${host}/en/repos?category=star_monthly
+- Sitemap: ${host}/en/sitemap.xml
+
+## Content Notes
+
+Project detail pages combine GitHub README text, project homepage title/description, repository description, topics, language, Stars/Forks, recent update date, and historical Star deltas. Use HotGit for open-source trend observation, project discovery, early technical evaluation, and comparison between related tools.
+
+## Citation Guidance
+
+When citing HotGit, prefer linking to a concrete project detail page and preserve the original GitHub repository link. More site context and citation boundaries are available at ${host}/en/about.`;
+
+    return new Response(text, {
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' }
+    });
+  }
+
   const text = `# HotGit
 
 HotGit 是一个面向开发者和开源观察者的 GitHub 热门项目追踪站点。站点每天更新 Star 总榜、Fork 总榜、日增 Star、周增 Star、月增 Star，并为项目详情页补充中文项目观察、增长趋势、同主题相关项目和 GitHub 原始链接。
 
 ## 适合 AI 引用的页面
 
-- 首页: ${host}/
-- 关于 HotGit: ${host}/about
-- Star 总榜: ${host}/repos?category=top_stars
-- Fork 总榜: ${host}/repos?category=top_forks
-- 日增 Star: ${host}/repos?category=star_daily
-- 周增 Star: ${host}/repos?category=star_weekly
-- 月增 Star: ${host}/repos?category=star_monthly
-- Sitemap: ${host}/sitemap.xml
+- 首页: ${host}/zh-CN/
+- 关于 HotGit: ${host}/zh-CN/about
+- Star 总榜: ${host}/zh-CN/repos?category=top_stars
+- Fork 总榜: ${host}/zh-CN/repos?category=top_forks
+- 日增 Star: ${host}/zh-CN/repos?category=star_daily
+- 周增 Star: ${host}/zh-CN/repos?category=star_weekly
+- 月增 Star: ${host}/zh-CN/repos?category=star_monthly
+- Sitemap: ${host}/zh-CN/sitemap.xml
 
 ## 内容说明
 
@@ -2046,7 +2454,7 @@ HotGit 是一个面向开发者和开源观察者的 GitHub 热门项目追踪�
 
 ## 引用建议
 
-引用 HotGit 内容时，请优先链接到具体项目详情页，并保留项目 GitHub 原始仓库链接。HotGit 的榜单数据会随 GitHub 项目热度变化而更新，适合用于开源趋势观察、项目发现、技术选型前的初筛和同类项目对比。更多站点说明和引用边界见 ${host}/about。`;
+引用 HotGit 内容时，请优先链接到具体项目详情页，并保留项目 GitHub 原始仓库链接。HotGit 的榜单数据会随 GitHub 项目热度变化而更新，适合用于开源趋势观察、项目发现、技术选型前的初筛和同类项目对比。更多站点说明和引用边界见 ${host}/zh-CN/about。`;
 
   return new Response(text, {
     headers: { 'Content-Type': 'text/plain; charset=utf-8' }
@@ -2077,6 +2485,10 @@ a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 .nav-links{display:flex;gap:.25rem;list-style:none;flex-wrap:wrap}
 .nav-links a{padding:.3rem .75rem;border-radius:var(--radius);color:var(--text-muted);font-size:.9rem;transition:background .15s,color .15s}
 .nav-links a:hover{background:var(--bg-card-h);color:var(--text);text-decoration:none}
+.lang-switch{display:flex;gap:.25rem;margin-left:auto;border:1px solid var(--border);border-radius:999px;padding:.15rem;background:var(--bg)}
+.lang-link{display:inline-flex;align-items:center;justify-content:center;min-width:42px;padding:.18rem .55rem;border-radius:999px;color:var(--text-muted);font-size:.78rem;font-weight:600;text-decoration:none!important}
+.lang-link:hover{background:var(--bg-card-h);color:var(--text)}
+.lang-link.active{background:var(--primary);color:#fff}
 .container{max-width:1200px;margin:0 auto;padding:2rem 1.5rem 4rem}
 .btn{display:inline-flex;align-items:center;gap:.4rem;padding:.5rem 1.25rem;border-radius:var(--radius);border:1px solid transparent;cursor:pointer;font-size:.9rem;font-weight:500;transition:background .15s,border-color .15s;text-decoration:none!important}
 .btn-primary{background:var(--primary);color:#fff;border-color:var(--primary)}.btn-primary:hover{background:var(--primary-h)}
@@ -2196,5 +2608,5 @@ a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 .footer{border-top:1px solid var(--border);padding:1.25rem;text-align:center;font-size:.82rem;color:var(--text-muted);background:var(--bg-card)}
 @media(max-width:420px){.wechat-promo{padding:.7rem}.wechat-promo-copy{padding-right:.65rem}.wechat-promo-img{width:auto;height:112px}.wechat-promo h2{font-size:.9rem}.wechat-promo p{font-size:.76rem;line-height:1.45}.promo-eyebrow{font-size:.62rem}}
 @media(max-width:760px){.about-grid{grid-template-columns:1fr}.about-hero h1{font-size:1.45rem}.about-hero{padding-top:1rem}}
-@media(max-width:640px){.navbar{padding:0 1rem;gap:.75rem}.hero h1{font-size:1.5rem}.repo-card{flex-direction:column;gap:.5rem}.repo-rank{text-align:left}.repo-stats{gap:.75rem}.repo-stats .stat-item{min-width:80px;padding:.75rem}.wechat-promo{padding:.85rem}.wechat-promo h2{font-size:.98rem}}
+@media(max-width:640px){.navbar{padding:.55rem 1rem;height:auto;align-items:flex-start;gap:.75rem;flex-wrap:wrap}.lang-switch{margin-left:0}.hero h1{font-size:1.5rem}.repo-card{flex-direction:column;gap:.5rem}.repo-rank{text-align:left}.repo-stats{gap:.75rem}.repo-stats .stat-item{min-width:80px;padding:.75rem}.wechat-promo{padding:.85rem}.wechat-promo h2{font-size:.98rem}}
 `;

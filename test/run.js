@@ -918,9 +918,18 @@ console.log(YELLOW('\nSuite 4: Worker Source Validation'));
   assertContains('worker: CST offset +8h',           src, '8 * 3600_000');
   assertContains('worker: category latest date support', src, 'SELECT MAX(crawl_date) AS d FROM repos WHERE category = ?');
   assertContains('worker: stats use per-category latest', src, 'SELECT category, MAX(crawl_date) AS crawl_date');
+  assertContains('worker: api repos uses category date', src, "const crawlDate = q.get('date')   || await getLatestDate(env.DB, category)");
   assertContains('worker: repos page uses category date', src, "await getLatestDate(env.DB, category)");
   assertContains('worker: category dates support', src, 'SELECT DISTINCT crawl_date FROM repos WHERE category = ?');
-  assertContains('worker: tabs do not pin unavailable date', src, 'href="/repos?category=${cat}"');
+  assertContains('worker: tabs do not pin unavailable date', src, 'routePath(`/repos?category=${cat}`, langPrefix)');
+  assertContains('worker: locale config',             src, "const LOCALES");
+  assertContains('worker: zh locale prefix',          src, "prefix: '/zh-CN'");
+  assertContains('worker: en locale prefix',          src, "prefix: '/en'");
+  assertContains('worker: locale cookie',             src, 'hotgit_locale');
+  assertContains('worker: locale path parser',        src, 'function parseLocalizedPath');
+  assertContains('worker: preferred locale redirect', src, 'redirectToLocale');
+  assertContains('worker: language switcher',         src, 'class="lang-switch"');
+  assertContains('worker: hreflang alternates',       src, 'rel="alternate" hreflang=');
   assertContains('worker: analytics snippet const',  src, 'const ANALYTICS_HEAD_SNIPPET');
   assertContains('worker: Adsense account meta',     src, 'ca-pub-0790471852661955');
   assertContains('worker: gtag id',                  src, 'G-RJDEV8XM5Y');
@@ -949,10 +958,15 @@ console.log(YELLOW('\nSuite 4: Worker Source Validation'));
   assertContains('worker: detail uses saved insight', src, "repo.project_insight || buildProjectInsight(repo, history, '', '')");
   assertContains('worker: detail meta uses insight', src, 'metaDescriptionFromInsight');
   assertContains('worker: detail jsonld abstract',   src, 'abstract: projectInsight');
+  assertContains('worker: repo field translation reader', src, 'async function getRepoFieldTranslation');
+  assertContains('worker: repo field translation writer', src, 'async function saveRepoFieldTranslation');
+  assertContains('worker: localized repo content',   src, 'async function getLocalizedRepoContent');
+  assertContains('worker: repo translation keyed by field', src, 'repo_id = ? AND field_name = ? AND target_lang = ?');
+  assertContains('worker: list uses localized repo content', src, "getLocalizedRepoContent(env.DB, repo, locale, ['name', 'description'])");
   assertContains('worker: about page',               src, 'async function pageAbout');
   assertContains('worker: about jsonld',             src, "'@type': 'AboutPage'");
   assertContains('worker: about faq jsonld',         src, "'@type': 'FAQPage'");
-  assertContains('worker: about llms link',          src, 'href="/llms.txt"');
+  assertContains('worker: about llms link',          src, "routePath('/llms.txt', langPrefix)");
   assertContains('worker: llms route',               src, "'/llms.txt'");
   assertContains('worker: llms page',                src, 'function pageLlmsTxt');
   assertContains('worker: project insight builder',  src, 'function buildProjectInsight');
@@ -967,6 +981,9 @@ console.log(YELLOW('\nSuite 4: Worker Source Validation'));
   assertContains('worker: robots disallows api',     src, 'Disallow: /api/');
   assertContains('worker: robots disallows backfill', src, 'Disallow: /backfillinsights');
   assertContains('worker: sitemap includes about',   src, '`${host}/about`');
+  assertContains('worker: sitemap includes zh about', src, '`${host}${prefix}/about`');
+  assertContains('worker: robots includes zh sitemap', src, 'Sitemap: https://${domain}/zh-CN/sitemap.xml');
+  assertContains('worker: robots includes en sitemap', src, 'Sitemap: https://${domain}/en/sitemap.xml');
   assertContains('worker: sitemap lastmod',          src, '<lastmod>');
   assertContains('worker: trending parser',          src, 'function parseTrendingRepoNames');
   assertContains('worker: daily fetch uses potential pool', src, "fn: () => fetchPotentialDailyRepos");
@@ -1100,6 +1117,15 @@ console.log(YELLOW('\nSuite 6: Star Increment Calculation'));
   const sql = readFileSync(path.join(__dirname, '../migrations/0006_add_project_insight_updated_at.sql'), 'utf8');
   assertContains('migration 6: project_insight_updated_at column', sql, 'project_insight_updated_at');
   assertContains('migration 6: alter repos table', sql, 'ALTER TABLE repos');
+}
+
+{
+  const sql = readFileSync(path.join(__dirname, '../migrations/0007_extend_translations_for_repo_fields.sql'), 'utf8');
+  assertContains('migration 7: repo_id column', sql, 'repo_id INTEGER');
+  assertContains('migration 7: field_name column', sql, 'field_name TEXT');
+  assertContains('migration 7: source_lang column', sql, 'source_lang TEXT');
+  assertContains('migration 7: source_text column', sql, 'source_text TEXT');
+  assertContains('migration 7: repo field language index', sql, 'idx_translations_repo_field_lang');
 }
 
 
