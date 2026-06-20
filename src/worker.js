@@ -1204,6 +1204,16 @@ async function getSitemapRepos(db, limit = 1000) {
   return rows.results;
 }
 
+async function getSitemapListCounts(db) {
+  const rows = await db.prepare(
+    `SELECT crawl_date, category, COUNT(*) AS total
+     FROM repos
+     GROUP BY crawl_date, category
+     ORDER BY crawl_date DESC, category`
+  ).all();
+  return rows.results;
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // API 处理器
 // ══════════════════════════════════════════════════════════════════════
@@ -1816,6 +1826,9 @@ async function pageRepos(request, env, locale = DEFAULT_LOCALE, langPrefix = '')
   const crawlDate = q.get('date')   || await getLatestDate(env.DB, category);
   const canonicalParams = new URLSearchParams({ category });
   if (crawlDate) canonicalParams.set('date', crawlDate);
+  if (!search && page > 1) canonicalParams.set('page', String(page));
+  if (!search && page > 1 && perPage !== 20) canonicalParams.set('per_page', String(perPage));
+  if (!search && lang) canonicalParams.set('lang', lang);
   const currentListPath = `/repos?${canonicalParams.toString()}`;
   const canonicalUrl = siteUrl(env, routePath(currentListPath, langPrefix));
   const shouldNoIndex = Boolean(search || requestedCategory !== category);
@@ -2326,10 +2339,30 @@ async function pageSitemap(env, localeFilter = null) {
   const host = `https://${domain}`;
   const sitemapRepos = await getSitemapRepos(env.DB);
   const dates = await getCrawlDates(env.DB);
+  const listCounts = await getSitemapListCounts(env.DB);
   const locales = localeFilter ? [normalizeLocale(localeFilter)] : Object.keys(LOCALES);
   const latestDate = dates[0] || '';
   const sitemapEntry = (loc, changefreq, priority, lastmod = latestDate) => `
   <url><loc>${escXml(loc)}</loc>${lastmod ? `<lastmod>${escXml(lastmod)}</lastmod>` : ''}<changefreq>${changefreq}</changefreq><priority>${priority}</priority></url>`;
+  const addRepoListEntries = (prefix = '') => {
+    let entries = sitemapEntry(`${host}${prefix}/repos`, 'daily', '0.9');
+    for (const category of Object.keys(CATEGORY_LABELS)) {
+      const freq = category === 'star_monthly' || category === 'star_weekly' ? 'weekly' : 'daily';
+      entries += sitemapEntry(`${host}${prefix}/repos?category=${encodeURIComponent(category)}`, freq, '0.8');
+    }
+    for (const row of listCounts) {
+      if (!dates.slice(0, 30).includes(row.crawl_date)) continue;
+      const category = CATEGORY_LABELS[row.category] ? row.category : 'top_stars';
+      const freq = category === 'star_monthly' || category === 'star_weekly' ? 'weekly' : 'daily';
+      const baseUrl = `${host}${prefix}/repos?category=${encodeURIComponent(category)}&date=${encodeURIComponent(row.crawl_date)}`;
+      entries += sitemapEntry(baseUrl, freq, '0.7', row.crawl_date);
+      const totalPages = Math.ceil((Number(row.total) || 0) / 20);
+      for (let page = 2; page <= totalPages; page++) {
+        entries += sitemapEntry(`${baseUrl}&page=${page}`, freq, '0.5', row.crawl_date);
+      }
+    }
+    return entries;
+  };
   
   let xml = `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">`;
@@ -2337,11 +2370,7 @@ async function pageSitemap(env, localeFilter = null) {
   if (!localeFilter) {
     xml += sitemapEntry(`${host}/`, 'daily', '1.0');
     xml += sitemapEntry(`${host}/about`, 'monthly', '0.7');
-    xml += sitemapEntry(`${host}/repos`, 'daily', '0.9');
-    for (const category of Object.keys(CATEGORY_LABELS)) {
-      const freq = category === 'star_monthly' || category === 'star_weekly' ? 'weekly' : 'daily';
-      xml += sitemapEntry(`${host}/repos?category=${encodeURIComponent(category)}`, freq, '0.8');
-    }
+    xml += addRepoListEntries();
     for (const date of dates.slice(0, 30)) {
       xml += sitemapEntry(`${host}/repos?date=${encodeURIComponent(date)}`, 'daily', '0.6', date);
     }
@@ -2356,12 +2385,8 @@ async function pageSitemap(env, localeFilter = null) {
     const prefix = LOCALES[locale].prefix;
     xml += sitemapEntry(`${host}${prefix}/`, 'daily', '1.0');
     xml += sitemapEntry(`${host}${prefix}/about`, 'monthly', '0.7');
-    xml += sitemapEntry(`${host}${prefix}/repos`, 'daily', '0.9');
     xml += sitemapEntry(`${host}${prefix}/llms.txt`, 'monthly', '0.4');
-    for (const category of Object.keys(CATEGORY_LABELS)) {
-      const freq = category === 'star_monthly' || category === 'star_weekly' ? 'weekly' : 'daily';
-      xml += sitemapEntry(`${host}${prefix}/repos?category=${encodeURIComponent(category)}`, freq, '0.8');
-    }
+    xml += addRepoListEntries(prefix);
     for (const date of dates.slice(0, 30)) {
       xml += sitemapEntry(`${host}${prefix}/repos?date=${encodeURIComponent(date)}`, 'daily', '0.6', date);
     }
