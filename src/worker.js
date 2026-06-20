@@ -64,7 +64,7 @@ function hasLocaleCookie(request) {
 }
 
 function shouldRedirectToPreferredLocale(path) {
-  return path === '/' || path === '/about' || path === '/repos' || /^\/repo\//.test(path) || /^\/r\/\d+$/.test(path);
+  return path === '/' || path === '/about' || path === '/repos' || /^\/repo\//.test(path);
 }
 
 function redirectToLocale(url, locale) {
@@ -77,6 +77,12 @@ function withLocaleCookie(response, locale) {
   if (!locale) return response;
   const headers = new Headers(response.headers);
   headers.append('Set-Cookie', `${LOCALE_COOKIE}=${encodeURIComponent(normalizeLocale(locale))}; Path=/; Max-Age=31536000; SameSite=Lax; Secure`);
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
+function withRobotsHeader(response, value = 'noindex, follow') {
+  const headers = new Headers(response.headers);
+  headers.set('X-Robots-Tag', value);
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
@@ -2320,7 +2326,7 @@ async function pageRepoDetailById(env, id, locale = DEFAULT_LOCALE, langPrefix =
   const repo = await getRepoById(env.DB, id);
   
   if (!repo) {
-    return html(baseLayout(tr(locale, '仓库已移除 — HotGit', 'Repository Gone — HotGit'), `
+    return withRobotsHeader(html(baseLayout(tr(locale, '仓库已移除 — HotGit', 'Repository Gone — HotGit'), `
       <section class="empty-state">
         <h1>${tr(locale, '仓库已移除', 'Repository Gone')}</h1>
         <p>ID: ${id} ${tr(locale, '当前没有可用的仓库映射，搜索引擎可以从索引中移除此短链接。', 'no longer has an available repository mapping. Search engines can remove this short URL from their index.')}</p>
@@ -2331,12 +2337,12 @@ async function pageRepoDetailById(env, id, locale = DEFAULT_LOCALE, langPrefix =
       langPrefix,
       description: `ID ${id} 已无可用仓库映射。`,
       robots: 'noindex,follow'
-    }), 410);
+    }), 410));
   }
 
   const [owner, ...nameParts] = repo.full_name.split('/');
   const name = nameParts.join('/');
-  return Response.redirect(siteUrl(env, routePath(`/repo/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`, langPrefix)), 301);
+  return withRobotsHeader(Response.redirect(siteUrl(env, routePath(`/repo/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`, langPrefix)), 301));
 }
 
 async function pageSitemap(env, localeFilter = null) {
