@@ -922,6 +922,7 @@ console.log(YELLOW('\nSuite 4: Worker Source Validation'));
   assertContains('worker: repos page uses category date', src, "await getLatestDate(env.DB, category)");
   assertContains('worker: category dates support', src, 'SELECT DISTINCT crawl_date FROM repos WHERE category = ?');
   assertContains('worker: tabs do not pin unavailable date', src, 'routePath(`/repos?category=${cat}`, langPrefix)');
+  assertContains('worker: public list filters stay indexable', src, 'const shouldNoIndex = Boolean(search || requestedCategory !== category)');
   assertContains('worker: locale config',             src, "const LOCALES");
   assertContains('worker: zh locale prefix',          src, "prefix: '/zh-CN'");
   assertContains('worker: en locale prefix',          src, "prefix: '/en'");

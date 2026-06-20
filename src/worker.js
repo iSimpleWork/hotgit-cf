@@ -1818,7 +1818,7 @@ async function pageRepos(request, env, locale = DEFAULT_LOCALE, langPrefix = '')
   if (crawlDate) canonicalParams.set('date', crawlDate);
   const currentListPath = `/repos?${canonicalParams.toString()}`;
   const canonicalUrl = siteUrl(env, routePath(currentListPath, langPrefix));
-  const shouldNoIndex = Boolean(search || lang || page > 1 || perPage !== 20 || requestedCategory !== category);
+  const shouldNoIndex = Boolean(search || requestedCategory !== category);
   const labels = categoryLabels(locale);
   const pageDescription = tr(
     locale,
