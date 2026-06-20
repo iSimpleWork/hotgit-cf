@@ -1113,6 +1113,13 @@ function repoPrimaryName(repo) {
   return (repo.full_name || '').split('/').pop() || repo.full_name || '';
 }
 
+function repoDetailPath(fullName, langPrefix = '') {
+  const [owner, ...nameParts] = String(fullName || '').split('/');
+  const name = nameParts.join('/');
+  if (!owner || !name) return routePath('/', langPrefix);
+  return routePath(`/repo/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`, langPrefix);
+}
+
 function resolveRepoFieldFromBase(repo, fieldName, targetLang) {
   const locale = normalizeLocale(targetLang);
   if (fieldName === 'name') {
@@ -1886,15 +1893,13 @@ async function pageRepos(request, env, locale = DEFAULT_LOCALE, langPrefix = '')
       forksDisplay = `<span>🍴 ${fmtNum(repo.forks)}</span>`;
     }
     
-    const nameUrl = encodeURIComponent(repo.full_name);
-    const repoDetailUrl = routePath(`/repo/${nameUrl}`, langPrefix);
-    const repoIdUrl = routePath(`/r/${repo.id}`, langPrefix);
+    const repoDetailUrl = repoDetailPath(repo.full_name, langPrefix);
     return `
     <div class="repo-card">
       <div class="repo-rank">#${repo.rank}</div>
       <div class="repo-main">
         <div class="repo-title-line">
-          <a class="repo-name" href="${repoIdUrl}">${escHtml(repo.full_name)}</a>
+          <a class="repo-name" href="${repoDetailUrl}">${escHtml(repo.full_name)}</a>
           ${langBadge}
         </div>
         ${localizedRepo.description ? `<p class="repo-desc">${escHtml(localizedRepo.description)}</p>` : ''}
@@ -2243,7 +2248,7 @@ async function pageRepoDetail(env, owner, name, locale = DEFAULT_LOCALE, langPre
 
   const relatedHtml = related.length 
     ? `<section class="related-repos"><h2>${tr(locale, '同语言热门项目', 'Popular Projects in the Same Language')}</h2><div class="repo-list">${related.map(r => `
-      <a class="repo-card" href="${routePath(`/r/${r.id}`, langPrefix)}">
+      <a class="repo-card" href="${repoDetailPath(r.full_name, langPrefix)}">
         <div class="repo-main">
           <div class="repo-title-line"><span class="repo-name">${escHtml(r.full_name)}</span></div>
           <div class="repo-meta"><span>⭐ ${fmtNum(r.stars)}</span><span>🍴 ${fmtNum(r.forks)}</span></div>
@@ -2253,7 +2258,7 @@ async function pageRepoDetail(env, owner, name, locale = DEFAULT_LOCALE, langPre
 
   const topicRelatedHtml = topicRelated.length
     ? `<section class="related-repos topic-related"><h2>${tr(locale, '同主题相关项目', 'Related Projects by Topic')}</h2><p class="related-intro">${tr(locale, '如果你正在调研同类工具，可以继续看看这些项目的实现思路、社区热度和近期增长表现。', 'If you are evaluating similar tools, compare implementation direction, community traction, and recent growth signals.')}</p><div class="repo-list">${topicRelated.map(r => `
-      <a class="repo-card" href="${routePath(`/r/${r.id}`, langPrefix)}">
+      <a class="repo-card" href="${repoDetailPath(r.full_name, langPrefix)}">
         <div class="repo-main">
           <div class="repo-title-line"><span class="repo-name">${escHtml(r.full_name)}</span>${r.language && r.language !== 'Unknown' ? `<span class="lang-badge">${escHtml(r.language)}</span>` : ''}</div>
           ${r.description ? `<p class="repo-desc">${escHtml(r.description)}</p>` : ''}
