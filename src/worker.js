@@ -2320,18 +2320,18 @@ async function pageRepoDetailById(env, id, locale = DEFAULT_LOCALE, langPrefix =
   const repo = await getRepoById(env.DB, id);
   
   if (!repo) {
-    return html(baseLayout(tr(locale, '仓库未找到 — HotGit', 'Repository Not Found — HotGit'), `
+    return html(baseLayout(tr(locale, '仓库已移除 — HotGit', 'Repository Gone — HotGit'), `
       <section class="empty-state">
-        <h1>${tr(locale, '仓库未找到', 'Repository Not Found')}</h1>
-        <p>ID: ${id} ${tr(locale, '不在热门榜单中。', 'is not in the current rankings.')}</p>
+        <h1>${tr(locale, '仓库已移除', 'Repository Gone')}</h1>
+        <p>ID: ${id} ${tr(locale, '当前没有可用的仓库映射，搜索引擎可以从索引中移除此短链接。', 'no longer has an available repository mapping. Search engines can remove this short URL from their index.')}</p>
         <a class="btn btn-primary" href="${routePath('/', langPrefix)}">${tr(locale, '返回首页', 'Back Home')}</a>
       </section>`, {
       env,
       locale,
       langPrefix,
-      description: `ID ${id} 暂未收录在 HotGit 热门榜单中。`,
+      description: `ID ${id} 已无可用仓库映射。`,
       robots: 'noindex,follow'
-    }), 404);
+    }), 410);
   }
 
   const [owner, ...nameParts] = repo.full_name.split('/');

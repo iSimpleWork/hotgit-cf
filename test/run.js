@@ -987,6 +987,8 @@ console.log(YELLOW('\nSuite 4: Worker Source Validation'));
   assertContains('worker: topic related section',    src, '同主题相关项目');
   assertContains('worker: related reader intro',     src, '实现思路、社区热度和近期增长表现');
   assertContains('worker: r id canonical redirect',  src, 'Response.redirect');
+  assertContains('worker: stale r id returns gone',  src, 'Repository Gone');
+  assertContains('worker: stale r id uses 410',      src, '), 410)');
   assertContains('worker: robots disallows api',     src, 'Disallow: /api/');
   assertContains('worker: robots disallows backfill', src, 'Disallow: /backfillinsights');
   assertContains('worker: sitemap includes about',   src, '`${host}/about`');
