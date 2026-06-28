@@ -2428,9 +2428,6 @@ Disallow: /backfillinsights
 Sitemap: https://${domain}/sitemap.xml
 Sitemap: https://${domain}/zh-CN/sitemap.xml
 Sitemap: https://${domain}/en/sitemap.xml
-LLM-Content: https://${domain}/llms.txt
-LLM-Content: https://${domain}/zh-CN/llms.txt
-LLM-Content: https://${domain}/en/llms.txt
 `;
   return new Response(robots, {
     headers: { 'Content-Type': 'text/plain; charset=utf-8' }

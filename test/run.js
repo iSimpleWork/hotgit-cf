@@ -997,6 +997,8 @@ console.log(YELLOW('\nSuite 4: Worker Source Validation'));
   assertContains('worker: sitemap includes zh about', src, '`${host}${prefix}/about`');
   assertContains('worker: robots includes zh sitemap', src, 'Sitemap: https://${domain}/zh-CN/sitemap.xml');
   assertContains('worker: robots includes en sitemap', src, 'Sitemap: https://${domain}/en/sitemap.xml');
+  assert('worker: robots excludes unsupported content signal', !src.includes('Content-Signal:'));
+  assert('worker: robots excludes unsupported llm content directive', !src.includes('LLM-Content:'));
   assertContains('worker: sitemap lastmod',          src, '<lastmod>');
   assertContains('worker: trending parser',          src, 'function parseTrendingRepoNames');
   assertContains('worker: daily fetch uses potential pool', src, "fn: () => fetchPotentialDailyRepos");

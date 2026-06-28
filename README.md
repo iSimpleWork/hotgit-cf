@@ -109,6 +109,8 @@ bash deploy.sh
 
 `deploy.sh` 会先执行远端 D1 迁移，再部署 Worker。它从环境变量读取配置，动态生成临时部署文件，**不会修改源码中的 wrangler.toml**。
 
+Cloudflare 控制台中的 **Security Settings → Bot traffic → Instruct AI bot traffic with robots.txt** 必须保持关闭。该功能会在 Worker 返回的标准 `robots.txt` 前注入 `Content-Signal` 等非标准规则，导致 Google Search Console 报告无法识别的规则。AI 可发现性由站内 `llms.txt` 和页面链接提供，不在 `robots.txt` 中使用非标准指令。
+
 部署成功后设置 GitHub Token Secret（提升爬取限额）：
 
 ```bash
